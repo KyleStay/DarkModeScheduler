@@ -363,6 +363,67 @@ struct SunCalculatorTestMain {
                     "timed pause → suspend even when schedule wants a change")
         }
 
+        // --- Test switch: the .preview override (on-demand preview) ---
+        do {
+            print("Test switch (.preview override):")
+            let boundary = at(2024, 1, 10, 20, 0)
+
+            // A preview override uses a far-future `until`, so it stays active
+            // across ticks (it's cleared on relaunch / by "Back to schedule",
+            // never by expiry).
+            let preview = Override(reason: .preview, until: .distantFuture)
+            t.check(preview.isActive(at: at(2024, 1, 10, 12, 0)), "preview override active now")
+            t.check(preview.isActive(at: at(2124, 1, 10, 12, 0)), "preview override still active a century later")
+
+            // decide SUSPENDS under an active .preview override: no enforcement,
+            // the override is preserved, and the previewed appearance is accepted
+            // as the new baseline (so it is never snapped back).
+            let suspended = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
+                                                     currentMode: .dark, scheduledMode: .light,
+                                                     lastEnforced: .dark, override: preview,
+                                                     nextBoundary: boundary)
+            t.check(suspended.enforce == nil, "preview override → enforcement suspended (no snap-back)")
+            t.check(suspended.override?.reason == .preview, "preview override preserved while active")
+            t.check(suspended.lastEnforced == .dark, "preview accepts the previewed appearance as baseline")
+
+            // Clearing the override (e.g. "Back to schedule") resumes enforcement.
+            // Because the app set lastEnforced to the previewed mode, this is NOT
+            // mistaken for a manual divergence — it cleanly enforces the schedule.
+            let resumed = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
+                                                   currentMode: .dark, scheduledMode: .light,
+                                                   lastEnforced: .dark, override: nil,
+                                                   nextBoundary: boundary)
+            t.check(resumed.override == nil && resumed.enforce == .light,
+                    "clearing preview → enforce schedule (no false manual override)")
+        }
+
+        // --- Override migration: the Reason decoder tolerates unknown cases ---
+        do {
+            print("Override Reason decoding (migration-safe):")
+            let enc = JSONEncoder()
+            let dec = JSONDecoder()
+
+            // A .preview override round-trips exactly.
+            let original = Override(reason: .preview, until: at(2024, 1, 10, 20, 0))
+            if let data = try? enc.encode(original),
+               let back = try? dec.decode(Override.self, from: data) {
+                t.check(back == original, "preview override round-trips through Codable")
+            } else { t.check(false, "preview override should encode/decode") }
+
+            // An archive with a reason this build doesn't know maps to .manual
+            // rather than throwing and discarding the whole override.
+            let bogus = "{\"reason\":\"someFutureReason\",\"until\":740000000}".data(using: .utf8)!
+            if let back = try? dec.decode(Override.self, from: bogus) {
+                t.check(back.reason == .manual, "unknown reason decodes to .manual (not a decode failure)")
+            } else { t.check(false, "unknown reason should decode leniently, not throw") }
+
+            // Legacy reasons still decode to themselves.
+            let legacy = "{\"reason\":\"pausedUntilBoundary\",\"until\":740000000}".data(using: .utf8)!
+            if let back = try? dec.decode(Override.self, from: legacy) {
+                t.check(back.reason == .pausedUntilBoundary, "legacy pausedUntilBoundary still decodes correctly")
+            } else { t.check(false, "legacy reason should decode") }
+        }
+
         t.finish()
     }
 }

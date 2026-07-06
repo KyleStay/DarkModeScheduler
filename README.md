@@ -29,6 +29,7 @@ want per-transition tuning.
 | 6 | **Switch notifications** (opt-in, default off) | Optionally posts a "Switched to Dark/Light" notification on an actual switch. Authorization is requested only when you enable it, and redundant (idempotent) no-op ticks never notify. |
 | 7 | **Menu-bar glance** | The menu-bar item's tooltip and accessibility label surface the next transition (mode + time) — or the current pause state — without opening the popover. |
 | 8 | **Night Shift coordination** (opt-in, default off) | Ties warm color temperature to the same schedule (warm at night, off during day). See the caveat below. |
+| 9 | **Test switch** | Preview Light/Dark on demand — confirm switching works (and that Automation permission is granted) without waiting for sunrise/sunset. The preview pauses the schedule (it won't snap back); "Back to schedule" resumes. A preview is momentary — it never persists across relaunch and never posts a switch notification. |
 
 ---
 
@@ -131,6 +132,15 @@ Settings / granted → refresh). If you deny it, postal code remains available.
 
 The current override and when it ends are shown in the popover; the state
 persists across relaunch.
+
+### Test switch
+
+Use **Preview Light** / **Preview Dark** to switch the appearance immediately,
+even when it isn't the scheduled time — a quick way to confirm switching works
+and that Automation permission is granted. While previewing, the schedule is
+paused (the app won't snap the appearance back); tap **Back to schedule** to
+resume. A preview is momentary: it never persists across a relaunch and never
+posts a switch notification. It works identically in sun and fixed modes.
 
 ### Launch at login
 
@@ -299,7 +309,7 @@ Darkmode scheduler/
 ├── main.swift               # SwiftUI App/Scene, --selftest, entry dispatch.
 ├── AppModel.swift           # @MainActor orchestrator: timer, wake, tick,
 │                            #   applies EnforcementEngine decisions, persistence.
-├── PopoverView.swift        # The MenuBarExtra popover UI (all 8 features).
+├── PopoverView.swift        # The MenuBarExtra popover UI (all 9 features).
 ├── Services.swift           # AppearanceController, GeocodeService (intl),
 │                            #   LocationService (CoreLocation), NotificationService,
 │                            #   NightShiftController (private CBBlueLightClient).

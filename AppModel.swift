@@ -48,6 +48,9 @@ final class AppModel: ObservableObject {
     // MARK: Overrides / pause
     @Published private(set) var override: Override?
 
+    // MARK: Test switch (on-demand preview)
+    @Published private(set) var previewError: String?
+
     // MARK: Feature toggles
     @Published var notificationsEnabled = false
     @Published var nightShiftEnabled = false
@@ -64,6 +67,8 @@ final class AppModel: ObservableObject {
     var scheduledDark: Bool { scheduledMode.isDark }
     var scheduleMatches: Bool { currentMode == scheduledMode }
     var isOverridden: Bool { override != nil }
+    /// True while an on-demand "Test switch" preview is holding the appearance.
+    var isPreviewing: Bool { override?.reason == .preview }
 
     // MARK: Collaborators
     private let settings = SettingsStore()
@@ -95,6 +100,12 @@ final class AppModel: ObservableObject {
         notificationsEnabled = settings.notificationsEnabled
         nightShiftEnabled = settings.nightShiftEnabled
         override = settings.override
+        // A "Test switch" preview is momentary — never let it survive a relaunch.
+        // (Manual/pause overrides still persist across launches, as before.)
+        if override?.reason == .preview {
+            override = nil
+            settings.override = nil
+        }
         nightShiftAvailable = nightShift.isAvailable
 
         zipInput = location?.source == .zip ? (location?.zip ?? "") : ""
@@ -307,6 +318,9 @@ final class AppModel: ObservableObject {
     /// One-line summary for the menu bar's help/accessibility label.
     var glanceSummary: String {
         if let override, override.isActive(at: Date()) {
+            if override.reason == .preview {
+                return "Previewing \(currentMode.label) — Back to schedule"
+            }
             return "Paused — resumes \(shortDateTime(override.until))"
         }
         if let next = nextTransition {
@@ -323,7 +337,41 @@ final class AppModel: ObservableObject {
         case .manual:              return "Manual override — resumes \(resumes)"
         case .pausedDuration:      return "Paused — resumes \(resumes)"
         case .pausedUntilBoundary: return "Paused until next transition — resumes \(resumes)"
+        case .preview:             return "Previewing \(currentMode.label) (test switch)"
         }
+    }
+
+    // MARK: - Test switch (on-demand preview)
+
+    /// Apply an appearance immediately to test the switch, without waiting for the
+    /// schedule. Registers a `.preview` override so the scheduler SUSPENDS and
+    /// won't snap the appearance back on the next tick; "Back to schedule"
+    /// (`resumeNow`) clears it. Surfaces the `EnforceOutcome` via `previewError` /
+    /// `permissionBlocked`. Deliberately does NOT post a switch notification —
+    /// notifications are for real scheduled switches, not tests.
+    func previewAppearance(_ mode: AppearanceMode) {
+        previewError = nil
+        let outcome = appearance.apply(desired: mode)
+        switch outcome {
+        case .applied(let applied), .unchanged(let applied):
+            permissionBlocked = false
+            lastEnforced = applied
+            // distantFuture: a preview never auto-expires on a tick — it holds
+            // until the user taps "Back to schedule". It's cleared on relaunch.
+            let ov = Override(reason: .preview, until: .distantFuture)
+            override = ov
+            settings.override = ov
+            syncNightShift(active: applied.isDark)
+        case .failedPermission:
+            // Do NOT register an override; nothing changed. Reuse the existing
+            // Automation-permission hint via `permissionBlocked`.
+            permissionBlocked = true
+        case .failed(let code):
+            permissionBlocked = false
+            previewError = "Couldn't switch the appearance (error \(code)). Try again."
+        }
+        currentMode = appearance.currentMode()
+        updateGlance()
     }
 
     // MARK: - Manual override / pause actions (feature 1)
@@ -343,6 +391,9 @@ final class AppModel: ObservableObject {
     }
 
     private func setOverride(_ newValue: Override?) {
+        // Any override change (pause, resume, "Back to schedule") ends a preview
+        // interaction, so a stale preview error should not linger under the UI.
+        previewError = nil
         override = newValue
         settings.override = newValue
         tick()
