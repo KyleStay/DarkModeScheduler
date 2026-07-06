@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import AppKit
 
 // =============================================================================
 // PopoverView.swift — the MenuBarExtra popover UI. Every feature is reachable
@@ -16,7 +17,7 @@ struct PopoverView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 header
                 Divider()
                 nowSection
@@ -36,7 +37,17 @@ struct PopoverView: View {
             .padding(16)
             .frame(width: 320)
         }
-        .frame(maxHeight: 620)
+        // Size to content, but never taller than the screen it opens on — so the
+        // popover only scrolls if the content genuinely can't fit the display
+        // (e.g. very large system text), instead of at an arbitrary fixed height.
+        .frame(maxHeight: maxPopoverHeight)
+    }
+
+    /// The usable height of the screen the menu bar lives on, minus a small
+    /// margin. Falls back to a generous constant if no screen is reported.
+    private var maxPopoverHeight: CGFloat {
+        let visible = NSScreen.main?.visibleFrame.height ?? 900
+        return max(320, visible - 24)
     }
 
     // MARK: Header
@@ -61,7 +72,7 @@ struct PopoverView: View {
     // (test) buttons that are always available.
 
     private var nowSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Right now").font(.subheadline).bold()
 
             if model.isPreviewing {
@@ -141,7 +152,7 @@ struct PopoverView: View {
     // MARK: Schedule — mode, offsets / fixed times (features 2 & 3), sun times
 
     private var scheduleSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Schedule").font(.subheadline).bold()
             Picker("Mode", selection: Binding(
                 get: { model.scheduleMode },
@@ -243,7 +254,7 @@ struct PopoverView: View {
     // MARK: Location — source + postal / CoreLocation (features 4 & 5)
 
     private var locationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Location").font(.subheadline).bold()
             Picker("Source", selection: Binding(
                 get: { model.locationSource },
@@ -319,7 +330,7 @@ struct PopoverView: View {
     // MARK: Preferences — launch at login, notifications (6), Night Shift (8)
 
     private var preferencesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Preferences").font(.subheadline).bold()
 
             Toggle(isOn: Binding(
