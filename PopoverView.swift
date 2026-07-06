@@ -174,16 +174,35 @@ struct PopoverView: View {
 
     private func offsetRow(label: String, minutes: Int,
                            set: @escaping (Int) -> Void, anchor: String) -> some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Stepper(value: Binding(get: { minutes }, set: { set($0) }),
-                    in: SettingsStore.offsetRange, step: 5) {
+        let range = SettingsStore.offsetRange
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                // Live magnitude as you drag, e.g. "30m before sunset".
                 Text(offsetDescription(minutes, anchor: anchor))
                     .font(.caption).monospacedDigit()
+                // Reset to the exact sun event; only shown when there's an offset.
+                if minutes != 0 {
+                    Button("Reset") { set(0) }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                        .help("Reset to \(anchor) (no offset)")
+                }
+            }
+            // Slider gives a visual sense of how large the offset is (±3h) while
+            // setting it; snaps to 5-minute steps like the old stepper.
+            Slider(value: Binding(get: { Double(minutes) },
+                                  set: { set(Int($0.rounded())) }),
+                   in: Double(range.lowerBound)...Double(range.upperBound),
+                   step: 5) {
+                Text(label)
+            } minimumValueLabel: {
+                Text("−3h").font(.caption2).foregroundStyle(.secondary)
+            } maximumValueLabel: {
+                Text("+3h").font(.caption2).foregroundStyle(.secondary)
             }
             .labelsHidden()
-            .fixedSize()
         }
     }
 
