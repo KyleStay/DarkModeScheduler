@@ -138,6 +138,18 @@ final class AppModel: ObservableObject {
         locationService.onError = { [weak self] message in
             self?.locationError = message
         }
+        locationService.onAuthorizationGranted = { [weak self] in
+            guard let self else { return }
+            // Access was just granted (prompt approved, or enabled later in
+            // System Settings). If the user still wants My Location and we don't
+            // have a fix yet, fetch one automatically instead of making them
+            // click again.
+            guard self.locationSource == .coreLocation,
+                  self.location?.source != .coreLocation else { return }
+            Log.location.info("Access granted; auto-fetching location")
+            self.locationError = nil
+            self.locationService.requestLocation()
+        }
         // Mirror auth status into our published copy.
         locationService.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async {

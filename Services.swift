@@ -195,10 +195,12 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     /// Called on the main thread with a resolved fix / a human-readable error.
     var onResolved: ((ResolvedLocation) -> Void)?
     var onError: ((String) -> Void)?
+    /// Called on the main thread whenever authorization becomes granted (via the
+    /// prompt OR later in System Settings). The owner decides whether to fetch.
+    var onAuthorizationGranted: (() -> Void)?
 
     private let manager = CLLocationManager()
     private let geocoder = CLGeocoder()
-    private var wantsFixOnAuthorization = false
 
     override init() {
         authorizationStatus = manager.authorizationStatus
@@ -219,11 +221,12 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
 
     var isAuthorized: Bool { Self.isAuthorized(authorizationStatus) }
 
-    /// Ask for a location fix, driving the authorization flow as needed.
+    /// Ask for a location fix, driving the authorization flow as needed. When
+    /// authorization is not yet determined this triggers the prompt; the actual
+    /// fetch then happens via `onAuthorizationGranted` once the user responds.
     func requestLocation() {
         switch authorizationStatus {
         case .notDetermined:
-            wantsFixOnAuthorization = true
             manager.requestWhenInUseAuthorization()
         case .denied, .restricted:
             onError?("Location access is off. Enable it in System Settings → Privacy & Security → Location Services.")
@@ -239,11 +242,12 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         DispatchQueue.main.async {
             self.authorizationStatus = status
             Log.location.info("Authorization changed: \(status.rawValue)")
-            if self.wantsFixOnAuthorization, Self.isAuthorized(status) {
-                self.wantsFixOnAuthorization = false
-                manager.requestLocation()
+            // Fires for the initial prompt AND for later changes in System
+            // Settings. Notify the owner on any granted transition so it can
+            // auto-fetch; surface an error if access was turned off.
+            if Self.isAuthorized(status) {
+                self.onAuthorizationGranted?()
             } else if status == .denied || status == .restricted {
-                self.wantsFixOnAuthorization = false
                 self.onError?("Location access was denied. You can still use a postal code.")
             }
         }
