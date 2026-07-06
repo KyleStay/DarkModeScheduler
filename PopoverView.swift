@@ -2,9 +2,13 @@ import SwiftUI
 import CoreLocation
 
 // =============================================================================
-// PopoverView.swift — the MenuBarExtra popover UI. Every v2 feature is reachable
+// PopoverView.swift — the MenuBarExtra popover UI. Every feature is reachable
 // and wired here; all mutations go through AppModel setters so persistence and
 // re-evaluation happen in one place.
+//
+// Layout is ordered by how often a user needs it, top → bottom:
+//   Header (status) → Right now (pause + test) → Schedule → Location →
+//   Preferences → Quit.
 // =============================================================================
 
 struct PopoverView: View {
@@ -12,18 +16,16 @@ struct PopoverView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
                 Divider()
-                overrideSection
+                nowSection
                 Divider()
-                testSwitchSection
-                Divider()
-                modeSection
+                scheduleSection
                 Divider()
                 locationSection
                 Divider()
-                integrationsSection
+                preferencesSection
                 Divider()
                 HStack {
                     Spacer()
@@ -34,7 +36,7 @@ struct PopoverView: View {
             .padding(16)
             .frame(width: 320)
         }
-        .frame(maxHeight: 640)
+        .frame(maxHeight: 620)
     }
 
     // MARK: Header
@@ -52,29 +54,31 @@ struct PopoverView: View {
         }
     }
 
-    // MARK: Feature 1 — override / pause
+    // MARK: "Right now" — pause / resume (feature 1) + on-demand preview
+    //
+    // Both temporarily override the schedule, so they share one section: the
+    // status/banner up top, then whichever controls apply, then the preview
+    // (test) buttons that are always available.
 
-    private var overrideSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var nowSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Right now").font(.subheadline).bold()
+
             if model.isPreviewing {
-                // A preview owns its own state + "Back to schedule" control in the
-                // Test switch section below; here we just explain why enforcement
-                // is paused (and avoid a misleading "Adjusting to…" line).
-                Label("Schedule paused while previewing", systemImage: "pause.circle")
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill").foregroundStyle(.purple)
+                    Text("Previewing \(model.currentMode.label)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Back to schedule") { model.resumeNow() }
+                        .controlSize(.small)
+                }
             } else if let description = model.overrideDescription {
                 Label(description, systemImage: "pause.circle.fill")
                     .font(.caption).foregroundStyle(.orange)
                 Button("Resume schedule now") { model.resumeNow() }
                     .controlSize(.small)
             } else {
-                Text("Enforcement").font(.subheadline).bold()
-                HStack {
-                    Button("Pause 1 hour") { model.pauseForOneHour() }
-                        .controlSize(.small)
-                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
-                        .controlSize(.small)
-                }
                 HStack(spacing: 6) {
                     Image(systemName: model.scheduleMatches ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
                         .foregroundStyle(model.scheduleMatches ? .green : .orange)
@@ -83,6 +87,35 @@ struct PopoverView: View {
                          : "Adjusting to \(model.scheduledMode.label)…")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                HStack {
+                    Button("Pause 1 hour") { model.pauseForOneHour() }
+                        .controlSize(.small)
+                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
+                        .controlSize(.small)
+                }
+            }
+
+            // Preview (test) — always available: a quick way to confirm switching
+            // works without waiting for the schedule. Disables the one in effect.
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Test switch").font(.caption2).foregroundStyle(.secondary)
+                HStack {
+                    Button { model.previewAppearance(.light) } label: {
+                        Label("Preview Light", systemImage: "sun.max.fill")
+                    }
+                    .controlSize(.small)
+                    .disabled(model.isPreviewing && model.currentMode == .light)
+                    Button { model.previewAppearance(.dark) } label: {
+                        Label("Preview Dark", systemImage: "moon.stars.fill")
+                    }
+                    .controlSize(.small)
+                    .disabled(model.isPreviewing && model.currentMode == .dark)
+                }
+            }
+            .padding(.top, 2)
+
+            if let error = model.previewError {
+                Text(error).font(.caption).foregroundStyle(.red)
             }
             if model.permissionBlocked { permissionHint }
         }
@@ -105,44 +138,9 @@ struct PopoverView: View {
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
     }
 
-    // MARK: Test switch — preview an appearance on demand
+    // MARK: Schedule — mode, offsets / fixed times (features 2 & 3), sun times
 
-    private var testSwitchSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Test switch").font(.subheadline).bold()
-            Text("Preview an appearance now — a quick way to confirm switching works. The schedule stays paused until you go back.")
-                .font(.caption2).foregroundStyle(.secondary)
-            HStack {
-                Button { model.previewAppearance(.light) } label: {
-                    Label("Preview Light", systemImage: "sun.max.fill")
-                }
-                .controlSize(.small)
-                .disabled(model.isPreviewing && model.currentMode == .light)
-                Button { model.previewAppearance(.dark) } label: {
-                    Label("Preview Dark", systemImage: "moon.stars.fill")
-                }
-                .controlSize(.small)
-                .disabled(model.isPreviewing && model.currentMode == .dark)
-            }
-            if model.isPreviewing {
-                HStack(spacing: 6) {
-                    Image(systemName: "eye.fill").foregroundStyle(.purple)
-                    Text("Previewing \(model.currentMode.label)")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Back to schedule") { model.resumeNow() }
-                        .controlSize(.small)
-                }
-            }
-            if let error = model.previewError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
-        }
-    }
-
-    // MARK: Features 2 & 3 — schedule mode, offsets / fixed times
-
-    private var modeSection: some View {
+    private var scheduleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Schedule").font(.subheadline).bold()
             Picker("Mode", selection: Binding(
@@ -163,6 +161,11 @@ struct PopoverView: View {
                           minutes: model.lightOffsetMinutes,
                           set: { model.setLightOffset($0) },
                           anchor: "sunrise")
+                // The resulting sun times sit with the offsets that shift them.
+                if model.location != nil {
+                    row(label: "Sunrise", value: model.formatted(model.sunrise))
+                    row(label: "Sunset", value: model.formatted(model.sunset))
+                }
             } else {
                 fixedTimeRow(label: "Dark at", minutes: model.fixedDarkMinutes,
                              set: { model.setFixedDarkMinutes($0) })
@@ -237,7 +240,7 @@ struct PopoverView: View {
             })
     }
 
-    // MARK: Features 4 & 5 — location source, postal / CoreLocation
+    // MARK: Location — source + postal / CoreLocation (features 4 & 5)
 
     private var locationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -258,7 +261,7 @@ struct PopoverView: View {
             }
 
             if let location = model.location {
-                resolvedLocationRows(location)
+                row(label: "Place", value: location.displayName)
             }
         }
     }
@@ -313,21 +316,12 @@ struct PopoverView: View {
         }
     }
 
-    private func resolvedLocationRows(_ location: ResolvedLocation) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            row(label: "Place", value: location.displayName)
-            if model.scheduleMode == .sun {
-                row(label: "Sunrise", value: model.formatted(model.sunrise))
-                row(label: "Sunset", value: model.formatted(model.sunset))
-            }
-            row(label: "Current mode", value: model.currentMode.label)
-        }
-    }
+    // MARK: Preferences — launch at login, notifications (6), Night Shift (8)
 
-    // MARK: Features 6 & 8 — notifications, Night Shift; launch at login
-
-    private var integrationsSection: some View {
+    private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Preferences").font(.subheadline).bold()
+
             Toggle(isOn: Binding(
                 get: { model.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) })) {
