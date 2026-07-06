@@ -119,11 +119,32 @@ PLIST
 # Also stamp a PkgInfo for completeness.
 printf 'APPL????' > "${CONTENTS}/PkgInfo"
 
-echo "==> Ad-hoc code signing…"
-codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"
+# --- Code signing. Defaults to ad-hoc ("-") for local dev; release.sh overrides
+#     these to sign with Developer ID + Hardened Runtime + entitlements.
+#       CODESIGN_IDENTITY    signing identity (default "-" = ad-hoc)
+#       CODESIGN_ENTITLEMENTS  path to an entitlements plist (optional)
+#       CODESIGN_RUNTIME     non-empty → enable the Hardened Runtime
+SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+CODESIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
+if [ -n "${CODESIGN_RUNTIME:-}" ]; then
+    CODESIGN_ARGS+=(--options runtime)
+fi
+if [ -n "${CODESIGN_ENTITLEMENTS:-}" ]; then
+    CODESIGN_ARGS+=(--entitlements "$CODESIGN_ENTITLEMENTS")
+fi
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "==> Ad-hoc code signing…"
+    CODESIGN_ARGS+=(--timestamp=none)          # ad-hoc can't use the timestamp server
+else
+    echo "==> Code signing as: ${SIGN_IDENTITY}…"
+    CODESIGN_ARGS+=(--timestamp)               # secure timestamp (required for notarization)
+fi
+# No --deep: the app has no nested code (single binary), so signing the bundle
+# directly is correct and avoids --deep's deprecated behavior.
+codesign "${CODESIGN_ARGS[@]}" "$APP_BUNDLE"
 
 echo "==> Verifying signature…"
-codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
 echo
 echo "✅ Build complete."

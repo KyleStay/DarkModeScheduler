@@ -38,7 +38,19 @@ want per-transition tuning.
 - The Swift toolchain that ships with the Xcode command-line tools
   (`/usr/bin/swiftc`). No Xcode project, SPM packages, or other installs.
 
-## Build
+## Install (end users)
+
+Download **`DarkModeScheduler.dmg`**, double-click it, and **drag the app onto the
+Applications folder** shown in the window. Then launch it from Applications — a
+sun/moon icon appears in the menu bar; click it to open the popover.
+
+The release DMG is **signed with a Developer ID and notarized by Apple**, so
+Gatekeeper opens it with no "unidentified developer" warning. (See
+[Distribution](#distribution-signed--notarized-release) for how the DMG is
+produced.) The **first time** it changes the appearance, macOS asks for
+**Automation** permission — click **Allow** (see [Permissions](#permissions)).
+
+## Build (from source, for development)
 
 ```bash
 ./build.sh
@@ -46,20 +58,16 @@ want per-transition tuning.
 
 This compiles all Swift sources with `swiftc` (`-warnings-as-errors`, so the
 build is warnings-clean by contract), assembles `DarkModeScheduler.app` with a
-correct `Info.plist`, and ad-hoc code-signs it (`codesign -s - --deep`). It
-builds a **universal** (x86_64 + arm64) binary when both slices compile,
-otherwise the host architecture only. The script is idempotent and fails loudly
+correct `Info.plist`, and **ad-hoc** code-signs it for local use. It builds a
+**universal** (x86_64 + arm64) binary when both slices compile, otherwise the
+host architecture only. The script is idempotent and fails loudly
 (`set -euo pipefail`).
 
-Output: `./DarkModeScheduler.app`
+Output: `./DarkModeScheduler.app` — run it with `open DarkModeScheduler.app`.
 
-## Run
-
-```bash
-open DarkModeScheduler.app
-```
-
-A sun/moon icon appears in the menu bar. Click it to open the popover.
+> An ad-hoc build runs fine on the machine that built it, but it is **not**
+> signed for distribution. To produce a shareable, notarized DMG, use
+> [`./release.sh`](#distribution-signed--notarized-release).
 
 ---
 
@@ -185,6 +193,68 @@ warm color temperature follows the same Dark/Light schedule.
 
 ---
 
+## Distribution (signed & notarized release)
+
+`release.sh` produces the shippable artifact: a **Developer ID-signed,
+Hardened-Runtime, Apple-notarized, stapled** `DarkModeScheduler.app` packaged in
+a **drag-to-Applications DMG**. This is what lets a user download it and open it
+without Gatekeeper warnings.
+
+```bash
+./release.sh
+```
+
+### What it does
+
+1. Auto-detects your **Developer ID Application** identity and Team ID.
+2. Builds the universal app and signs it with the **Hardened Runtime** and
+   [`DarkModeScheduler.entitlements`](DarkModeScheduler.entitlements).
+3. **Notarizes the app** and staples the ticket (so it validates even offline).
+4. Assembles a signed **DMG** with an `Applications` symlink for drag-install.
+5. **Notarizes the DMG** and staples it, then runs a Gatekeeper assessment.
+
+Output: `dist/DarkModeScheduler.dmg` — ready to ship.
+
+### One-time prerequisites
+
+- An **Apple Developer Program** membership and a **Developer ID Application**
+  certificate installed in your keychain (create it under
+  *developer.apple.com → Certificates*, then double-click to install).
+- **Notarization credentials**, stored once as a `notarytool` keychain profile
+  using an [app-specific password](https://support.apple.com/102654):
+
+  ```bash
+  xcrun notarytool store-credentials "DarkModeScheduler" \
+      --apple-id "you@example.com" --team-id "TF2BG2VDPD" \
+      --password "abcd-efgh-ijkl-mnop"      # app-specific password
+  ```
+
+  Then run: `NOTARY_PROFILE=DarkModeScheduler ./release.sh`
+  (or pass `APPLE_ID` + `NOTARY_PASSWORD` + `TEAM_ID` in the environment).
+
+### Hardened Runtime entitlements
+
+The only entitlement is `com.apple.security.automation.apple-events`, which the
+Hardened Runtime **requires** for the app to send Apple Events (it drives System
+Events to flip Dark/Light). The app is intentionally **not sandboxed** (a
+Developer ID app; sandboxing is incompatible with driving System Events), and it
+keeps **library validation on** — the private CoreBrightness framework it
+`dlopen`s for Night Shift is Apple-signed, so no `disable-library-validation` is
+needed.
+
+### Graceful degradation
+
+`release.sh` still works without full setup, and tells you exactly what's
+missing:
+
+- **No Developer ID certificate** → it stops with instructions to obtain one.
+- **No notarization credentials** (or `SKIP_NOTARIZE=1`) → it builds a
+  Developer ID-signed **but un-notarized** DMG for local testing and prints the
+  one-time credential-setup command. Such a DMG works on your own machine but
+  would show a Gatekeeper warning on someone else's until it is notarized.
+
+---
+
 ## Developer notes
 
 ### Run the unit tests (no GUI required)
@@ -239,8 +309,13 @@ Darkmode scheduler/
 │                            #   Scheduler (sun+fixed), Override, EnforcementEngine.
 ├── SunCalculator.swift      # Pure NOAA sunrise/sunset math (shared with tests).
 ├── SunCalculatorTests.swift # Standalone, GUI-free unit tests (@main runner).
-├── build.sh                 # Compile + bundle + Info.plist + ad-hoc codesign.
+├── build.sh                 # Compile + bundle + Info.plist + codesign (ad-hoc
+│                            #   by default; env-overridable for release signing).
+├── release.sh               # Developer ID + Hardened Runtime + notarize +
+│                            #   staple → drag-to-Applications DMG.
+├── DarkModeScheduler.entitlements  # Hardened Runtime entitlements (automation).
 ├── run-tests.sh             # Compile + run the unit tests.
 ├── README.md                # This file.
-└── DarkModeScheduler.app    # Build output (created by build.sh).
+├── DarkModeScheduler.app    # Build output (created by build.sh).
+└── dist/DarkModeScheduler.dmg      # Release output (created by release.sh).
 ```
