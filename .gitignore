@@ -4,3 +4,7 @@
 
 # macOS
 .DS_Store
+
+# Release artifacts
+dist/
+*.dmg

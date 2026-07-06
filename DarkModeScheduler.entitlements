@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened Runtime entitlements for the notarized Developer ID build.
+
+      • automation.apple-events — REQUIRED. Under the Hardened Runtime, sending
+        Apple Events (we drive System Events to flip Dark/Light) is blocked
+        unless the app carries this entitlement. The user is still prompted for
+        Automation permission on first use (TCC); this entitlement only permits
+        the app to ask.
+
+      Deliberately NOT included:
+      • App Sandbox — a Developer ID app is not sandboxed; sandboxing is
+        incompatible with driving System Events and reading the global appearance.
+      • disable-library-validation — NOT needed. We dlopen the private
+        CoreBrightness framework for Night Shift, but it is Apple-signed, so the
+        Hardened Runtime's library validation already permits loading it. We keep
+        validation ON for security.
+      • get-task-allow — must be absent for a Developer ID / notarized build.
+      CoreLocation and local notifications need no entitlement for a non-sandboxed
+      Developer ID app; their Info.plist usage strings suffice.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
