@@ -94,6 +94,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <string>${MIN_MACOS}</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Dark Mode Scheduler controls System Events to switch the system appearance between Light and Dark on schedule.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Dark Mode Scheduler</string>
     <key>NSPrincipalClass</key>
