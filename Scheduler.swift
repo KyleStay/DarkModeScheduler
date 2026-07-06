@@ -204,6 +204,17 @@ struct Override: Codable, Equatable {
         case manual              // user manually flipped appearance (detected divergence)
         case pausedDuration      // "Pause for 1 hour"
         case pausedUntilBoundary // "Pause until next sunrise/sunset"
+        case preview             // user is testing the switch on demand ("Test switch")
+
+        /// Decode leniently: any raw value this build doesn't recognize (a case
+        /// added by a newer build, or one later renamed/removed) maps to
+        /// `.manual` — a conservative "honor the user until the next boundary"
+        /// default — instead of throwing and silently discarding the whole
+        /// persisted Override. Known raw values decode exactly as written.
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Reason(rawValue: raw) ?? .manual
+        }
     }
 
     let reason: Reason

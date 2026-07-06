@@ -17,6 +17,8 @@ struct PopoverView: View {
                 Divider()
                 overrideSection
                 Divider()
+                testSwitchSection
+                Divider()
                 modeSection
                 Divider()
                 locationSection
@@ -54,7 +56,13 @@ struct PopoverView: View {
 
     private var overrideSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let description = model.overrideDescription {
+            if model.isPreviewing {
+                // A preview owns its own state + "Back to schedule" control in the
+                // Test switch section below; here we just explain why enforcement
+                // is paused (and avoid a misleading "Adjusting to…" line).
+                Label("Schedule paused while previewing", systemImage: "pause.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let description = model.overrideDescription {
                 Label(description, systemImage: "pause.circle.fill")
                     .font(.caption).foregroundStyle(.orange)
                 Button("Resume schedule now") { model.resumeNow() }
@@ -95,6 +103,41 @@ struct PopoverView: View {
         }
         .padding(8)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    // MARK: Test switch — preview an appearance on demand
+
+    private var testSwitchSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Test switch").font(.subheadline).bold()
+            Text("Preview an appearance now — a quick way to confirm switching works. The schedule stays paused until you go back.")
+                .font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Button { model.previewAppearance(.light) } label: {
+                    Label("Preview Light", systemImage: "sun.max.fill")
+                }
+                .controlSize(.small)
+                .disabled(model.isPreviewing && model.currentMode == .light)
+                Button { model.previewAppearance(.dark) } label: {
+                    Label("Preview Dark", systemImage: "moon.stars.fill")
+                }
+                .controlSize(.small)
+                .disabled(model.isPreviewing && model.currentMode == .dark)
+            }
+            if model.isPreviewing {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill").foregroundStyle(.purple)
+                    Text("Previewing \(model.currentMode.label)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Back to schedule") { model.resumeNow() }
+                        .controlSize(.small)
+                }
+            }
+            if let error = model.previewError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
     }
 
     // MARK: Features 2 & 3 — schedule mode, offsets / fixed times
