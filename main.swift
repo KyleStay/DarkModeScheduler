@@ -1,558 +1,13 @@
 import SwiftUI
 import AppKit
 import Foundation
-import ServiceManagement
-import os
 
 // =============================================================================
-// Dark Mode Scheduler — a menu bar app that switches macOS to Dark at sunset
-// and Light at sunrise, using sun times computed locally (NOAA algorithm in
-// SunCalculator.swift) from a US zipcode the user enters.
-//
-// This file is the entire app. The pure sun math lives in SunCalculator.swift
-// so it can be unit-tested without a GUI (see SunCalculatorTests.swift).
-//
-// Structure:
-//   • Logger            — os.Logger instances.
-//   • ResolvedLocation  — the geocoded {zip, lat, lon, city, state}.
-//   • SettingsStore     — UserDefaults persistence.
-//   • GeocodeService    — the only network use (zip → lat/long).
-//   • AppearanceMode    — Light / Dark enum.
-//   • AppearanceController — reads live appearance, applies via AppleScript,
-//                            idempotent, handles the Automation permission.
-//   • AppModel          — @MainActor ObservableObject: state, timer, wake,
-//                          scheduling glue that the SwiftUI UI observes.
-//   • PopoverView       — the MenuBarExtra popover UI.
-//   • DarkModeSchedulerApp — the SwiftUI App / Scene.
-//   • SelfTest          — the hidden `--selftest` CLI path (items 4 & 5).
-//   • Top-level dispatch — routes `--selftest` vs normal launch.
+// main.swift — the SwiftUI App/Scene, the hidden `--selftest` CLI path, and the
+// top-level entry dispatch. All model/scheduling/UI logic lives in the other
+// files (Scheduler / Support / Services / AppModel / PopoverView), compiled
+// together into this single binary by build.sh.
 // =============================================================================
-
-// MARK: - Logging
-
-enum Log {
-    static let subsystem = "com.kyle.darkmodescheduler"
-    static let appearance = Logger(subsystem: subsystem, category: "appearance")
-    static let scheduler = Logger(subsystem: subsystem, category: "scheduler")
-    static let geocode = Logger(subsystem: subsystem, category: "geocode")
-    static let selftest = Logger(subsystem: subsystem, category: "selftest")
-}
-
-// MARK: - Model types
-
-/// A resolved location cached in UserDefaults. Only re-fetched when the zip changes.
-struct ResolvedLocation: Codable, Equatable {
-    let zip: String
-    let latitude: Double
-    let longitude: Double
-    let city: String
-    let state: String
-
-    var displayName: String { "\(city), \(state)" }
-}
-
-// MARK: - Settings persistence
-
-/// Thin, typed wrapper over UserDefaults for the app's persisted state.
-struct SettingsStore {
-    private let defaults: UserDefaults
-    private enum Key {
-        static let location = "resolvedLocation"
-    }
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
-
-    var location: ResolvedLocation? {
-        get {
-            guard let data = defaults.data(forKey: Key.location) else { return nil }
-            return try? JSONDecoder().decode(ResolvedLocation.self, from: data)
-        }
-        nonmutating set {
-            if let newValue, let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: Key.location)
-            } else {
-                defaults.removeObject(forKey: Key.location)
-            }
-        }
-    }
-}
-
-// MARK: - Geocoding (the only network use)
-
-enum GeocodeError: LocalizedError, Equatable {
-    case invalidZip
-    case notFound
-    case offline
-    case badResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidZip: return "Enter a valid 5-digit US zipcode."
-        case .notFound: return "No US location found for that zipcode."
-        case .offline: return "Can't reach the network. Check your connection and try again."
-        case .badResponse: return "Unexpected response from the geocoding service."
-        }
-    }
-}
-
-/// Resolves a US zipcode to a latitude/longitude and place name via the free,
-/// key-less Zippopotam API. This is the app's only network call — sun times are
-/// always computed locally.
-struct GeocodeService {
-
-    /// Shape of the api.zippopotam.us JSON response (keys contain spaces).
-    private struct Response: Decodable {
-        let places: [Place]
-        struct Place: Decodable {
-            let latitude: String
-            let longitude: String
-            let placeName: String
-            let stateAbbreviation: String
-            enum CodingKeys: String, CodingKey {
-                case latitude, longitude
-                case placeName = "place name"
-                case stateAbbreviation = "state abbreviation"
-            }
-        }
-    }
-
-    private let session: URLSession
-
-    init(session: URLSession = .shared) {
-        self.session = session
-    }
-
-    static func isValidZip(_ zip: String) -> Bool {
-        zip.count == 5 && zip.allSatisfy { $0.isNumber }
-    }
-
-    /// Resolve a 5-digit zip. Throws a `GeocodeError` on any failure — never crashes.
-    func resolve(zip: String) async throws -> ResolvedLocation {
-        let trimmed = zip.trimmingCharacters(in: .whitespaces)
-        guard Self.isValidZip(trimmed) else { throw GeocodeError.invalidZip }
-
-        guard let url = URL(string: "https://api.zippopotam.us/us/\(trimmed)") else {
-            throw GeocodeError.invalidZip
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 15
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch let error as URLError {
-            Log.geocode.error("Network error for \(trimmed, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            throw GeocodeError.offline
-        }
-
-        guard let http = response as? HTTPURLResponse else { throw GeocodeError.badResponse }
-        if http.statusCode == 404 { throw GeocodeError.notFound }
-        guard http.statusCode == 200 else {
-            Log.geocode.error("HTTP \(http.statusCode) for zip \(trimmed, privacy: .public)")
-            throw GeocodeError.badResponse
-        }
-
-        guard let decoded = try? JSONDecoder().decode(Response.self, from: data),
-              let place = decoded.places.first,
-              let lat = Double(place.latitude),
-              let lon = Double(place.longitude) else {
-            throw GeocodeError.badResponse
-        }
-
-        let location = ResolvedLocation(zip: trimmed,
-                                        latitude: lat,
-                                        longitude: lon,
-                                        city: place.placeName,
-                                        state: place.stateAbbreviation)
-        Log.geocode.info("Resolved \(trimmed, privacy: .public) → \(location.displayName, privacy: .public) (\(lat), \(lon))")
-        return location
-    }
-}
-
-// MARK: - Appearance control
-
-enum AppearanceMode: String, Equatable {
-    case light
-    case dark
-
-    var isDark: Bool { self == .dark }
-    var label: String { self == .dark ? "Dark" : "Light" }
-}
-
-/// The result of one `enforce(...)` cycle, useful for logging and self-tests.
-enum EnforceOutcome: Equatable {
-    case unchanged(AppearanceMode)          // already correct → no AppleScript issued
-    case applied(AppearanceMode)            // AppleScript issued, switch made
-    case failedPermission                   // Automation permission not granted
-    case failed(Int)                        // other AppleScript error (osastatus code)
-}
-
-/// Reads the live system appearance and applies changes idempotently via
-/// AppleScript to System Events (the only method that live-updates the UI).
-struct AppearanceController {
-
-    /// The current live appearance, read from the global-domain preference that
-    /// macOS keeps in sync (`AppleInterfaceStyle` == "Dark" when Dark).
-    func currentMode() -> AppearanceMode {
-        if let style = UserDefaults.standard.string(forKey: "AppleInterfaceStyle"),
-           style.lowercased() == "dark" {
-            return .dark
-        }
-        return .light
-    }
-
-    /// Ensure the system appearance equals `desired`. Idempotent: if the live
-    /// appearance already matches, **no AppleScript is issued** (no flicker).
-    @discardableResult
-    func enforce(desired: AppearanceMode) -> EnforceOutcome {
-        let current = currentMode()
-        guard current != desired else {
-            Log.appearance.debug("enforce: already \(desired.label, privacy: .public); no AppleScript issued")
-            return .unchanged(desired)
-        }
-        Log.appearance.info("enforce: \(current.label, privacy: .public) → \(desired.label, privacy: .public); issuing AppleScript")
-        return apply(desired: desired)
-    }
-
-    /// Unconditionally apply `desired` via AppleScript. Prefer `enforce(desired:)`.
-    @discardableResult
-    func apply(desired: AppearanceMode) -> EnforceOutcome {
-        let source = "tell application \"System Events\" to tell appearance preferences to set dark mode to \(desired.isDark)"
-        guard let script = NSAppleScript(source: source) else {
-            Log.appearance.error("Failed to construct NSAppleScript")
-            return .failed(-1)
-        }
-        var errorInfo: NSDictionary?
-        script.executeAndReturnError(&errorInfo)
-
-        if let errorInfo {
-            let code = (errorInfo[NSAppleScript.errorNumber] as? Int) ?? 0
-            let message = (errorInfo[NSAppleScript.errorMessage] as? String) ?? "unknown error"
-            // -1743 = errAEEventNotPermitted (Automation permission not granted).
-            if code == -1743 {
-                Log.appearance.error("AppleScript not permitted (-1743): Automation permission required")
-                return .failedPermission
-            }
-            Log.appearance.error("AppleScript failed (\(code)): \(message, privacy: .public)")
-            return .failed(code)
-        }
-        Log.appearance.info("Applied \(desired.label, privacy: .public)")
-        return .applied(desired)
-    }
-}
-
-// MARK: - App model (state + scheduling)
-
-@MainActor
-final class AppModel: ObservableObject {
-
-    // Persisted / resolved location.
-    @Published private(set) var location: ResolvedLocation?
-
-    // UI state.
-    @Published var zipInput: String = ""
-    @Published private(set) var geocodeError: String?
-    @Published private(set) var isResolving = false
-
-    // Sun / schedule state.
-    @Published private(set) var sunrise: SunEvent = .alwaysDown
-    @Published private(set) var sunset: SunEvent = .alwaysDown
-    @Published private(set) var scheduledMode: AppearanceMode = .light
-    @Published private(set) var currentMode: AppearanceMode = .light
-    @Published private(set) var permissionBlocked = false
-
-    // Launch-at-login state.
-    @Published private(set) var launchAtLogin = false
-    @Published private(set) var launchAtLoginError: String?
-
-    var scheduledDark: Bool { scheduledMode.isDark }
-    var scheduleMatches: Bool { currentMode == scheduledMode }
-
-    private let settings = SettingsStore()
-    private let geocoder = GeocodeService()
-    private let appearance = AppearanceController()
-    private let timeZone = TimeZone.current
-
-    private var timer: Timer?
-    private var wakeObserver: NSObjectProtocol?
-
-    init() {
-        location = settings.location
-        zipInput = location?.zip ?? ""
-        refreshLaunchAtLoginStatus()
-        startTimer()
-        observeWake()
-        tick()  // evaluate & enforce immediately on launch
-    }
-
-    deinit {
-        timer?.invalidate()
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
-        }
-    }
-
-    // MARK: Scheduling
-
-    private func startTimer() {
-        // Re-evaluate every 60s. Tolerance lets macOS coalesce for efficiency.
-        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
-        }
-        timer.tolerance = 10
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    private func observeWake() {
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                Log.scheduler.info("System woke; re-evaluating schedule")
-                self?.tick()
-            }
-        }
-    }
-
-    /// Recompute desired appearance from the current time & location and enforce it.
-    func tick(now: Date = Date()) {
-        currentMode = appearance.currentMode()
-
-        guard let location else {
-            // No location yet: reflect current appearance, do not enforce.
-            scheduledMode = currentMode
-            sunrise = .alwaysDown
-            sunset = .alwaysDown
-            return
-        }
-
-        let times = SunCalculator.sunTimes(latitude: location.latitude,
-                                           longitude: location.longitude,
-                                           date: now,
-                                           timeZone: timeZone)
-        sunrise = times.sunrise
-        sunset = times.sunset
-
-        let desired: AppearanceMode = Self.desiredMode(now: now, times: times) ? .dark : .light
-        scheduledMode = desired
-
-        let outcome = appearance.enforce(desired: desired)
-        switch outcome {
-        case .failedPermission: permissionBlocked = true
-        default: permissionBlocked = false
-        }
-        currentMode = appearance.currentMode()
-    }
-
-    /// Desired-mode rule: Dark if now is at/after sunset or before sunrise.
-    /// Polar fallbacks: never-rises → always Dark; never-sets → always Light.
-    static func desiredMode(now: Date, times: SunTimes) -> Bool {
-        switch times.sunrise {
-        case .alwaysDown:
-            return true    // sun never up → dark
-        case .alwaysUp:
-            return false   // sun never down → light
-        case .time(let sr):
-            guard case .time(let ss) = times.sunset else { return true }
-            return now >= ss || now < sr
-        }
-    }
-
-    // MARK: Zipcode changes
-
-    func saveZip() {
-        let trimmed = zipInput.trimmingCharacters(in: .whitespaces)
-        guard GeocodeService.isValidZip(trimmed) else {
-            geocodeError = GeocodeError.invalidZip.errorDescription
-            return
-        }
-        // Only re-fetch when the zip actually changed.
-        if let existing = location, existing.zip == trimmed {
-            geocodeError = nil
-            tick()
-            return
-        }
-
-        geocodeError = nil
-        isResolving = true
-        Task {
-            defer { isResolving = false }
-            do {
-                let resolved = try await geocoder.resolve(zip: trimmed)
-                settings.location = resolved
-                location = resolved
-                geocodeError = nil
-                tick()  // immediately enforce for the new location
-            } catch let error as GeocodeError {
-                geocodeError = error.errorDescription
-            } catch {
-                geocodeError = GeocodeError.badResponse.errorDescription
-            }
-        }
-    }
-
-    // MARK: Launch at login
-
-    func refreshLaunchAtLoginStatus() {
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-    }
-
-    func setLaunchAtLogin(_ enabled: Bool) {
-        launchAtLoginError = nil
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            Log.scheduler.error("Launch-at-login toggle failed: \(error.localizedDescription, privacy: .public)")
-            launchAtLoginError = "Couldn't update Launch at Login: \(error.localizedDescription)"
-        }
-        refreshLaunchAtLoginStatus()
-    }
-
-    // MARK: Formatting helpers for the UI
-
-    func formatted(_ event: SunEvent) -> String {
-        switch event {
-        case .time(let date):
-            let formatter = DateFormatter()
-            formatter.timeZone = timeZone
-            formatter.dateFormat = "h:mm a"
-            return formatter.string(from: date)
-        case .alwaysUp: return "No sunset (polar day)"
-        case .alwaysDown: return "No sunrise (polar night)"
-        }
-    }
-}
-
-// MARK: - UI
-
-struct PopoverView: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-
-            Divider()
-
-            zipSection
-
-            if let location = model.location {
-                Divider()
-                locationSection(location)
-            }
-
-            Divider()
-
-            settingsSection
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Quit") { NSApplication.shared.terminate(nil) }
-                    .keyboardShortcut("q")
-            }
-        }
-        .padding(16)
-        .frame(width: 300)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: model.scheduledDark ? "moon.stars.fill" : "sun.max.fill")
-                .font(.title2)
-                .foregroundStyle(model.scheduledDark ? Color.indigo : Color.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Dark Mode Scheduler").font(.headline)
-                Text("Scheduled: \(model.scheduledMode.label)")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var zipSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("US Zipcode").font(.subheadline).bold()
-            HStack {
-                TextField("e.g. 10001", text: $model.zipInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                    .onSubmit { model.saveZip() }
-                Button("Save") { model.saveZip() }
-                    .disabled(model.isResolving)
-                if model.isResolving {
-                    ProgressView().controlSize(.small)
-                }
-            }
-            if let error = model.geocodeError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
-        }
-    }
-
-    private func locationSection(_ location: ResolvedLocation) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            row(label: "Location", value: location.displayName)
-            row(label: "Sunrise", value: model.formatted(model.sunrise))
-            row(label: "Sunset", value: model.formatted(model.sunset))
-            row(label: "Current mode", value: model.currentMode.label)
-            HStack {
-                Image(systemName: model.scheduleMatches ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                    .foregroundStyle(model.scheduleMatches ? .green : .orange)
-                Text(model.scheduleMatches
-                     ? "Matches schedule"
-                     : "Adjusting to \(model.scheduledMode.label)…")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if model.permissionBlocked {
-                permissionHint
-            }
-        }
-    }
-
-    private var permissionHint: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Label("Automation permission needed", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).bold().foregroundStyle(.orange)
-            Text("Allow \"Dark Mode Scheduler\" to control System Events in\nSystem Settings → Privacy & Security → Automation, then try again.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-        .padding(8)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private var settingsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { model.launchAtLogin },
-                set: { model.setLaunchAtLogin($0) }
-            )) {
-                Text("Launch at Login").font(.subheadline)
-            }
-            .toggleStyle(.switch)
-            if let error = model.launchAtLoginError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
-        }
-    }
-
-    private func row(label: String, value: String) -> some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.subheadline).bold()
-        }
-    }
-}
 
 // MARK: - App
 
@@ -563,7 +18,12 @@ struct DarkModeSchedulerApp: App {
         MenuBarExtra {
             PopoverView().environmentObject(model)
         } label: {
-            Image(systemName: model.scheduledDark ? "moon.stars" : "sun.max")
+            // Feature 7 — menu-bar glance: the icon reflects the live appearance,
+            // and the next transition (mode + time) is surfaced without opening
+            // the popover via the item's help tooltip and accessibility label.
+            Image(systemName: model.currentMode.isDark ? "moon.stars" : "sun.max")
+                .help(model.glanceSummary)
+                .accessibilityLabel(model.glanceSummary)
         }
         .menuBarExtraStyle(.window)
     }
@@ -571,23 +31,103 @@ struct DarkModeSchedulerApp: App {
 
 // MARK: - Self test (hidden `--selftest` CLI path; not on the user path)
 
-/// Command-line self-test used by build/CI verification. It exercises the
-/// AppearanceController end to end WITHOUT launching the GUI:
-///   • forces Dark then Light and confirms the live appearance flipped;
-///   • confirms idempotency (no AppleScript issued when already at desired);
-///   • restores the original appearance.
+/// Command-line self-test used by build/CI verification. It runs two kinds of
+/// checks, all without launching the GUI:
+///   • PURE (no permissions): the scheduling & state-machine logic — offsets,
+///     fixed-mode boundaries, next-transition, override expiry, and the manual
+///     divergence / suspend / enforce decisions.
+///   • LIVE (needs Automation permission): forces a real appearance switch,
+///     verifies it, confirms idempotency, and restores. If permission hasn't
+///     been granted it reports the -1743 condition instead of crashing.
 /// Exits 0 on success, non-zero on unexpected failure.
 enum SelfTest {
     static func run() -> Never {
+        print("=== Dark Mode Scheduler self-test ===")
+        var failures = 0
+        failures += runPureChecks()
+        failures += runLiveChecks()
+        print(failures == 0 ? "\n[selftest] ALL SELF-TESTS PASSED ✅"
+                            : "\n[selftest] \(failures) SELF-TEST(S) FAILED ❌")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    // MARK: Pure checks (no permissions required)
+
+    private static func runPureChecks() -> Int {
+        print("\n[selftest] --- pure scheduling & state-machine checks ---")
+        var failures = 0
+        func check(_ cond: Bool, _ label: String) {
+            print(cond ? "  ✅ \(label)" : "  ❌ \(label)")
+            if !cond { failures += 1 }
+        }
+
+        let tz = TimeZone(identifier: "America/New_York")!
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        func at(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+            cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+        }
+
+        // Fixed-mode boundary logic: Dark 20:00, Light 07:00.
+        let fixed = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: tz)
+        check(fixed.desiredMode(at: at(2024, 6, 1, 21, 0)) == .dark, "fixed: 21:00 is Dark")
+        check(fixed.desiredMode(at: at(2024, 6, 1, 12, 0)) == .light, "fixed: 12:00 is Light")
+        check(fixed.desiredMode(at: at(2024, 6, 1, 3, 0)) == .dark, "fixed: 03:00 is Dark")
+        if let next = fixed.nextTransition(after: at(2024, 6, 1, 12, 0)) {
+            check(next.mode == .dark, "fixed: next after noon is Dark")
+        } else { check(false, "fixed: expected a next transition") }
+
+        // Sun-mode offsets: Dark 30m before sunset must precede the un-offset sunset.
+        let plain = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
+                                           darkOffsetMinutes: 0, lightOffsetMinutes: 0), timeZone: tz)
+        let shifted = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
+                                             darkOffsetMinutes: -30, lightOffsetMinutes: 15), timeZone: tz)
+        let noon = at(2024, 6, 1, 12, 0)
+        if let plainDark = plain.transitions(around: noon).first(where: { $0.mode == .dark && $0.date > noon }),
+           let shiftDark = shifted.transitions(around: noon).first(where: { $0.mode == .dark && $0.date > noon }) {
+            let delta = plainDark.date.timeIntervalSince(shiftDark.date)
+            check(abs(delta - 1800) < 1, "sun: -30m dark offset lands 30m before sunset")
+        } else { check(false, "sun: could not find dark transitions") }
+
+        // Override expiry.
+        let ov = Override(reason: .pausedDuration, until: at(2024, 6, 1, 13, 0))
+        check(ov.isActive(at: at(2024, 6, 1, 12, 30)), "override: active before expiry")
+        check(!ov.isActive(at: at(2024, 6, 1, 13, 30)), "override: expired after until")
+
+        // State machine: manual divergence → suspend, then expiry → enforce.
+        let boundary = at(2024, 6, 1, 20, 0)
+        let d1 = EnforcementEngine.decide(now: at(2024, 6, 1, 12, 0),
+                                          currentMode: .dark, scheduledMode: .light,
+                                          lastEnforced: .light, override: nil, nextBoundary: boundary)
+        check(d1.enforce == nil && d1.override?.reason == .manual,
+              "engine: manual flip → suspend with .manual override")
+        let d2 = EnforcementEngine.decide(now: at(2024, 6, 1, 12, 1),
+                                          currentMode: .dark, scheduledMode: .light,
+                                          lastEnforced: .dark, override: d1.override, nextBoundary: boundary)
+        check(d2.enforce == nil, "engine: still suspended before boundary")
+        let d3 = EnforcementEngine.decide(now: at(2024, 6, 1, 20, 1),
+                                          currentMode: .dark, scheduledMode: .dark,
+                                          lastEnforced: .dark, override: d1.override, nextBoundary: boundary)
+        check(d3.override == nil && d3.enforce == .dark, "engine: after boundary → resume & enforce")
+        // Schedule advancing (not a manual flip) must enforce, not suspend.
+        let d4 = EnforcementEngine.decide(now: at(2024, 6, 1, 20, 5),
+                                          currentMode: .light, scheduledMode: .dark,
+                                          lastEnforced: .light, override: nil, nextBoundary: boundary)
+        check(d4.enforce == .dark && d4.override == nil, "engine: schedule advance → enforce (no false override)")
+
+        return failures
+    }
+
+    // MARK: Live checks (need Automation permission)
+
+    private static func runLiveChecks() -> Int {
+        print("\n[selftest] --- live appearance enforcement checks ---")
         let controller = AppearanceController()
         let original = controller.currentMode()
-        print("=== Dark Mode Scheduler self-test ===")
         print("[selftest] original appearance: \(original.label)")
 
         let target: AppearanceMode = (original == .dark) ? .light : .dark
         var failures = 0
 
-        // --- Item 4: force a switch and verify the live appearance changed. ---
         print("[selftest] forcing switch to \(target.label)…")
         let switchOutcome = controller.enforce(desired: target)
         print("[selftest]   → \(issued(switchOutcome))")
@@ -616,7 +156,6 @@ enum SelfTest {
             failures += 1
         }
 
-        // --- Item 5: idempotency — enforce same mode again → NO AppleScript. ---
         print("[selftest] enforcing \(target.label) again to check idempotency…")
         let repeatOutcome = controller.enforce(desired: target)
         print("[selftest]   → \(issued(repeatOutcome))")
@@ -627,7 +166,6 @@ enum SelfTest {
             failures += 1
         }
 
-        // --- Restore original appearance. ---
         print("[selftest] restoring original appearance (\(original.label))…")
         let restore = controller.enforce(desired: original)
         let restored = waitForMode(original, controller: controller)
@@ -636,14 +174,9 @@ enum SelfTest {
         } else {
             print("[selftest] ⚠️ could not confirm restore (now \(restored.label))")
         }
-
-        print(failures == 0 ? "\n[selftest] ALL SELF-TESTS PASSED ✅" : "\n[selftest] \(failures) SELF-TEST(S) FAILED ❌")
-        exit(failures == 0 ? 0 : 1)
+        return failures
     }
 
-    /// Human-readable "was AppleScript issued?" derived from the real outcome.
-    /// `.unchanged` is returned *only* from the branch that skips AppleScript,
-    /// so this is a faithful readout of the idempotency decision.
     private static func issued(_ outcome: EnforceOutcome) -> String {
         switch outcome {
         case .unchanged: return "AppleScript issued: NO  (idempotent no-op)"
@@ -653,7 +186,6 @@ enum SelfTest {
         }
     }
 
-    /// Poll `AppleInterfaceStyle` briefly; it can lag the AppleScript call.
     private static func waitForMode(_ target: AppearanceMode,
                                     controller: AppearanceController,
                                     timeout: TimeInterval = 3.0) -> AppearanceMode {
@@ -670,7 +202,7 @@ enum SelfTest {
 // MARK: - Entry point
 //
 // main.swift permits top-level code. We intercept `--selftest` before starting
-// the SwiftUI app so items 4 & 5 are scriptable without any GUI interaction.
+// the SwiftUI app so the pure and live checks are scriptable without any GUI.
 
 if CommandLine.arguments.contains("--selftest") {
     SelfTest.run()  // never returns
