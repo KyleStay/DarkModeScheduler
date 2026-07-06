@@ -109,8 +109,18 @@ struct Scheduler {
         case let .fixed(darkMinutes, lightMinutes):
             return [Transition(date: fixedTime(on: dayMidnight, minutes: lightMinutes), mode: .light),
                     Transition(date: fixedTime(on: dayMidnight, minutes: darkMinutes), mode: .dark)]
-                .sorted { $0.date < $1.date }
+                .sorted(by: Self.chronological)
         }
+    }
+
+    /// Deterministic ordering: by date, and on an exact tie put Dark before
+    /// Light. That makes a degenerate equal-times config (dark == light) resolve
+    /// to Light for `desiredMode` (the last transition ≤ now), matching the
+    /// "empty dark window ⇒ always light" fallback, instead of depending on an
+    /// unstable sort.
+    private static func chronological(_ a: Transition, _ b: Transition) -> Bool {
+        if a.date != b.date { return a.date < b.date }
+        return a.mode == .dark && b.mode == .light
     }
 
     /// The wall-clock time-of-day (`minutes` since midnight) on the given day,
@@ -135,7 +145,7 @@ struct Scheduler {
             guard let dayStart = cal.date(byAdding: .day, value: offset, to: today) else { continue }
             all.append(contentsOf: transitions(forDayStartingAt: dayStart))
         }
-        return all.sorted { $0.date < $1.date }
+        return all.sorted(by: Self.chronological)
     }
 
     /// The appearance that *should* be in effect at `now`.

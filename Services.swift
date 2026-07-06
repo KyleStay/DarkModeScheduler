@@ -252,8 +252,11 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
         Log.location.info("Got fix: \(loc.coordinate.latitude), \(loc.coordinate.longitude)")
-        geocoder.reverseGeocodeLocation(loc) { [weak self] placemarks, _ in
+        geocoder.reverseGeocodeLocation(loc) { [weak self] placemarks, error in
             guard let self else { return }
+            // A newer reverse-geocode cancels this one; don't let the cancelled
+            // callback overwrite the newer result with a generic placeholder.
+            if let clError = error as? CLError, clError.code == .geocodeCanceled { return }
             let placemark = placemarks?.first
             let city = placemark?.locality ?? placemark?.name ?? "Current Location"
             let region = placemark?.administrativeArea ?? ""
@@ -333,11 +336,9 @@ protocol NightShiftControlling {
 final class CoreBrightnessNightShift: NightShiftControlling {
 
     private typealias SetEnabledIMP = @convention(c) (AnyObject, Selector, ObjCBool) -> ObjCBool
-    private typealias SetStrengthIMP = @convention(c) (AnyObject, Selector, Float, ObjCBool) -> ObjCBool
 
     private let client: NSObject?
     private let setEnabledSel = NSSelectorFromString("setEnabled:")
-    private let setStrengthSel = NSSelectorFromString("setStrength:commit:")
 
     init() {
         // The private CoreBrightness framework isn't linked, so its classes are
@@ -372,14 +373,9 @@ final class CoreBrightnessNightShift: NightShiftControlling {
     func setActive(_ active: Bool) -> Bool {
         guard let client else { return false }
 
-        // When activating, nudge the warmth to a reasonable mid strength first.
-        if active,
-           client.responds(to: setStrengthSel),
-           let method = class_getInstanceMethod(type(of: client), setStrengthSel) {
-            let fn = unsafeBitCast(method_getImplementation(method), to: SetStrengthIMP.self)
-            _ = fn(client, setStrengthSel, 0.5, true)
-        }
-
+        // Toggle Night Shift on/off only. We deliberately do NOT call
+        // setStrength: — that would overwrite the warmth the user configured in
+        // System Settings. Enabling applies their chosen strength.
         guard let method = class_getInstanceMethod(type(of: client), setEnabledSel) else {
             return false
         }

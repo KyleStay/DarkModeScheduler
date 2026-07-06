@@ -234,6 +234,14 @@ struct SunCalculatorTestMain {
             t.check(s.desiredMode(at: at(2024, 1, 10, 0, 30)) == .dark, "00:30 → Dark")
         }
 
+        // --- Degenerate fixed schedule (Dark time == Light time) is deterministic ---
+        do {
+            print("Fixed schedule (degenerate) — Dark == Light == 07:00:")
+            let s = Scheduler(config: .fixed(darkMinutes: 7 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
+            t.check(s.desiredMode(at: at(2024, 1, 10, 12, 0)) == .light, "equal times → Light (deterministic)")
+            t.check(s.desiredMode(at: at(2024, 1, 10, 23, 0)) == .light, "equal times → Light late in day")
+        }
+
         // --- Inverted fixed schedule (Dark before Light within the day) ---
         do {
             print("Fixed schedule (inverted) — Dark 09:00 / Light 18:00:")

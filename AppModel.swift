@@ -197,7 +197,12 @@ final class AppModel: ObservableObject {
         updateSunDisplay(now: now)
 
         guard let scheduler = buildScheduler() else {
-            // No schedule available (sun mode w/o location): reflect, don't enforce.
+            // No schedule available (sun mode w/o location): reflect, don't
+            // enforce — but still expire a due override so it can't linger.
+            if let ov = override, !ov.isActive(at: now) {
+                override = nil
+                settings.override = nil
+            }
             scheduledMode = currentMode
             nextTransition = nil
             updateGlance()
@@ -244,7 +249,6 @@ final class AppModel: ObservableObject {
                 permissionBlocked = false
                 lastEnforced = appearance.currentMode()
             }
-            syncNightShift(active: mode.isDark)
         } else {
             // Suspended (paused) or a detected manual divergence: accept the
             // user's current appearance as the new baseline.
@@ -252,6 +256,11 @@ final class AppModel: ObservableObject {
         }
 
         currentMode = appearance.currentMode()
+        // Keep Night Shift tied to the appearance actually in effect (so a failed
+        // or permission-blocked switch never leaves the display warm in Light).
+        if decision.enforce != nil {
+            syncNightShift(active: currentMode.isDark)
+        }
         updateGlance()
     }
 
@@ -424,11 +433,9 @@ final class AppModel: ObservableObject {
         if enabled {
             notifications.requestAuthorization { [weak self] granted in
                 guard let self else { return }
+                // If denied, the toggle simply reflects the real (off) state.
                 self.notificationsEnabled = granted
                 self.settings.notificationsEnabled = granted
-                if !granted {
-                    self.locationError = nil
-                }
             }
         } else {
             notificationsEnabled = false
@@ -443,10 +450,13 @@ final class AppModel: ObservableObject {
         settings.nightShiftEnabled = enabled
         if enabled {
             lastNightShiftActive = nil
-            syncNightShift(active: scheduledMode.isDark)
+            syncNightShift(active: currentMode.isDark)
         } else {
-            // Turn warmth back off so we don't leave the display tinted.
-            if nightShift.isAvailable { nightShift.setActive(false) }
+            // Only undo warmth WE turned on; never disable a Night Shift the
+            // user configured themselves (their own schedule) but we never touched.
+            if nightShift.isAvailable, lastNightShiftActive == true {
+                nightShift.setActive(false)
+            }
             lastNightShiftActive = nil
         }
     }
