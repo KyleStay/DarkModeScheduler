@@ -22,7 +22,15 @@ CONTENTS="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS}/MacOS"
 RESOURCES_DIR="${CONTENTS}/Resources"
 
-SOURCES=(main.swift SunCalculator.swift)
+SOURCES=(
+    main.swift
+    AppModel.swift
+    PopoverView.swift
+    Services.swift
+    Support.swift
+    Scheduler.swift
+    SunCalculator.swift
+)
 
 echo "==> Cleaning previous bundle…"
 rm -rf "$APP_BUNDLE"
@@ -96,6 +104,10 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Dark Mode Scheduler controls System Events to switch the system appearance between Light and Dark on schedule.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Dark Mode Scheduler can use your location to compute local sunrise and sunset times. This is optional — a postal code works without it.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Dark Mode Scheduler can use your location to compute local sunrise and sunset times. This is optional — a postal code works without it.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Dark Mode Scheduler</string>
     <key>NSPrincipalClass</key>
