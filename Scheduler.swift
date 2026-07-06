@@ -107,12 +107,21 @@ struct Scheduler {
             return out.sorted { $0.date < $1.date }
 
         case let .fixed(darkMinutes, lightMinutes):
-            let light = dayMidnight.addingTimeInterval(Double(lightMinutes) * 60)
-            let dark = dayMidnight.addingTimeInterval(Double(darkMinutes) * 60)
-            return [Transition(date: light, mode: .light),
-                    Transition(date: dark, mode: .dark)]
+            return [Transition(date: fixedTime(on: dayMidnight, minutes: lightMinutes), mode: .light),
+                    Transition(date: fixedTime(on: dayMidnight, minutes: darkMinutes), mode: .dark)]
                 .sorted { $0.date < $1.date }
         }
+    }
+
+    /// The wall-clock time-of-day (`minutes` since midnight) on the given day,
+    /// resolved DST-aware via the calendar. Adding raw seconds to midnight would
+    /// drift by an hour on spring-forward / fall-back days (e.g. a fixed 07:00
+    /// would fire at 08:00 after spring-forward); building from components keeps
+    /// it anchored to 07:00 wall-clock.
+    private func fixedTime(on dayMidnight: Date, minutes: Int) -> Date {
+        calendar.date(bySettingHour: minutes / 60, minute: minutes % 60,
+                      second: 0, of: dayMidnight)
+            ?? dayMidnight.addingTimeInterval(Double(minutes) * 60)
     }
 
     /// Sorted transitions across `[day-1 … day+2]` relative to `now`. This window

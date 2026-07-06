@@ -243,6 +243,27 @@ struct SunCalculatorTestMain {
             t.check(s.desiredMode(at: at(2024, 1, 10, 6, 0)) == .light, "06:00 → Light (before)")
         }
 
+        // --- Fixed times are DST-anchored to wall-clock, not elapsed seconds ---
+        do {
+            print("Fixed schedule DST anchoring — America/New_York:")
+            let s = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
+            // Spring-forward day (clocks jump 02:00→03:00). A raw midnight+7h would
+            // land at 08:00; the fix must keep the Light transition at 07:00.
+            let springNoon = at(2024, 3, 10, 12, 0)
+            if let light = s.transitions(around: springNoon)
+                .first(where: { nyCal.isDate($0.date, inSameDayAs: springNoon) && $0.mode == .light }) {
+                let c = nyCal.dateComponents([.hour, .minute], from: light.date)
+                t.check(c.hour == 7 && c.minute == 0, "spring-forward Light stays 07:00 (got \(c.hour ?? -1):\(c.minute ?? -1))")
+            } else { t.check(false, "DST: found spring-forward Light transition") }
+            // Fall-back day (clocks 02:00→01:00). Dark at 20:00 must stay 20:00.
+            let fallNoon = at(2024, 11, 3, 12, 0)
+            if let dark = s.transitions(around: fallNoon)
+                .first(where: { nyCal.isDate($0.date, inSameDayAs: fallNoon) && $0.mode == .dark }) {
+                let c = nyCal.dateComponents([.hour, .minute], from: dark.date)
+                t.check(c.hour == 20 && c.minute == 0, "fall-back Dark stays 20:00 (got \(c.hour ?? -1):\(c.minute ?? -1))")
+            } else { t.check(false, "DST: found fall-back Dark transition") }
+        }
+
         // --- Next-transition computation (both modes) ---
         do {
             print("Next transition:")

@@ -123,6 +123,12 @@ final class AppModel: ObservableObject {
     private func wireLocationService() {
         locationService.onResolved = { [weak self] resolved in
             guard let self else { return }
+            // Ignore a late fix if the user has since switched back to a postal
+            // code, so a stale CoreLocation result can't overwrite a newer choice.
+            guard self.locationSource == .coreLocation else {
+                Log.location.info("Ignoring stale location fix; source is now postal code")
+                return
+            }
             self.settings.location = resolved
             self.location = resolved
             self.countryInput = resolved.country
@@ -218,22 +224,31 @@ final class AppModel: ObservableObject {
                 Log.scheduler.info("Manual divergence detected → override until \(ov.until, privacy: .public)")
             }
         }
-        lastEnforced = decision.lastEnforced
-
         if let mode = decision.enforce {
             let outcome = appearance.enforce(desired: mode)
             switch outcome {
             case .applied(let applied):
                 permissionBlocked = false
+                lastEnforced = applied
                 if notificationsEnabled { notifications.postSwitch(to: applied) }
-            case .unchanged:
+            case .unchanged(let unchangedMode):
                 permissionBlocked = false
+                lastEnforced = unchangedMode
             case .failedPermission:
+                // We did NOT change the appearance. Keep `lastEnforced` equal to
+                // the live appearance so the next tick retries instead of
+                // mistaking the unchanged appearance for a manual override.
                 permissionBlocked = true
+                lastEnforced = appearance.currentMode()
             case .failed:
                 permissionBlocked = false
+                lastEnforced = appearance.currentMode()
             }
             syncNightShift(active: mode.isDark)
+        } else {
+            // Suspended (paused) or a detected manual divergence: accept the
+            // user's current appearance as the new baseline.
+            lastEnforced = decision.lastEnforced
         }
 
         currentMode = appearance.currentMode()
