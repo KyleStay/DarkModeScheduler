@@ -206,9 +206,17 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         manager.desiredAccuracy = kCLLocationAccuracyKilometer
     }
 
-    var isAuthorized: Bool {
-        authorizationStatus == .authorizedAlways || authorizationStatus == .authorized
+    /// Any granted variant (Always / WhenInUse / the deprecated `.authorized`).
+    /// Categorize by exclusion so we don't depend on which variants this SDK
+    /// exposes on macOS.
+    static func isAuthorized(_ status: CLAuthorizationStatus) -> Bool {
+        switch status {
+        case .notDetermined, .denied, .restricted: return false
+        default: return true
+        }
     }
+
+    var isAuthorized: Bool { Self.isAuthorized(authorizationStatus) }
 
     /// Ask for a location fix, driving the authorization flow as needed.
     func requestLocation() {
@@ -216,12 +224,10 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         case .notDetermined:
             wantsFixOnAuthorization = true
             manager.requestWhenInUseAuthorization()
-        case .authorizedAlways, .authorized:
-            manager.requestLocation()
         case .denied, .restricted:
             onError?("Location access is off. Enable it in System Settings → Privacy & Security → Location Services.")
-        @unknown default:
-            onError?("Location access is unavailable.")
+        default:  // any authorized variant
+            manager.requestLocation()
         }
     }
 
@@ -232,8 +238,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         DispatchQueue.main.async {
             self.authorizationStatus = status
             Log.location.info("Authorization changed: \(status.rawValue)")
-            if self.wantsFixOnAuthorization,
-               status == .authorizedAlways || status == .authorized {
+            if self.wantsFixOnAuthorization, Self.isAuthorized(status) {
                 self.wantsFixOnAuthorization = false
                 manager.requestLocation()
             } else if status == .denied || status == .restricted {

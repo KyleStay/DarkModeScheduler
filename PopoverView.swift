@@ -238,15 +238,13 @@ struct PopoverView: View {
                 Button("Open Location Settings") { model.openLocationSettings() }
                     .controlSize(.small)
             }
-        case .authorized, .authorizedAlways:
+        default:  // any authorized variant
             VStack(alignment: .leading, spacing: 4) {
                 Label("Location access granted", systemImage: "location.fill")
                     .font(.caption).foregroundStyle(.green)
                 Button("Refresh location") { model.useMyLocation() }
                     .controlSize(.small)
             }
-        @unknown default:
-            Button("Use my location") { model.useMyLocation() }
         }
         if let error = model.locationError {
             Text(error).font(.caption).foregroundStyle(.red)
