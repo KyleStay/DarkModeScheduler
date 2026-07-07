@@ -77,11 +77,14 @@ final class AppModel: ObservableObject {
     private let notifications = NotificationService()
     private let nightShift: NightShiftControlling = CoreBrightnessNightShift()
     let locationService = LocationService()
-    private let timeZone = TimeZone.current
+    /// Read live (not captured once at launch) so scheduling follows the
+    /// device's current time zone even if it changes while the app is running.
+    private var timeZone: TimeZone { .current }
 
     private var timer: Timer?              // 60s safety-net poll
     private var transitionTimer: Timer?    // one-shot, fires right at the next boundary
     private var wakeObserver: NSObjectProtocol?
+    private var timeChangeObservers: [NSObjectProtocol] = []
 
     /// The mode the app believes it last put in effect (or accepted). Seeds the
     /// manual-divergence detection so the first tick never false-triggers.
@@ -120,6 +123,7 @@ final class AppModel: ObservableObject {
         refreshLaunchAtLoginStatus()
         startTimer()
         observeWake()
+        observeTimeChanges()
         tick()  // evaluate & enforce immediately on launch
     }
 
@@ -129,6 +133,7 @@ final class AppModel: ObservableObject {
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
+        timeChangeObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: - Setup
@@ -209,6 +214,23 @@ final class AppModel: ObservableObject {
                 Log.scheduler.info("System woke; re-evaluating schedule")
                 self?.tick()
             }
+        }
+    }
+
+    /// Re-evaluate immediately when the system clock or time zone changes (NTP
+    /// correction, manual clock change, or travelling across zones) instead of
+    /// waiting up to a minute for the next periodic poll. `tick()` reads the live
+    /// time and time zone and re-arms the boundary timer for the new schedule.
+    private func observeTimeChanges() {
+        let center = NotificationCenter.default
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange] {
+            let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    Log.scheduler.info("System clock/time zone changed; re-evaluating schedule")
+                    self?.tick()
+                }
+            }
+            timeChangeObservers.append(observer)
         }
     }
 
