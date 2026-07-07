@@ -397,6 +397,42 @@ struct SunCalculatorTestMain {
                     "clearing preview → enforce schedule (no false manual override)")
         }
 
+        // --- Switch early: bring the next scheduled change forward ---
+        do {
+            print("Switch early (.earlySwitch override):")
+            // Daytime: schedule is Light now, next transition is Dark at 20:00.
+            // Switching to Dark early holds it until that boundary via an
+            // .earlySwitch override, then the schedule (now Dark) takes over.
+            let boundary = at(2024, 1, 10, 20, 0)
+            let early = Override(reason: .earlySwitch, until: boundary)
+
+            // Before the boundary: suspended, holding the brought-forward Dark.
+            let held = EnforcementEngine.decide(now: at(2024, 1, 10, 15, 0),
+                                                currentMode: .dark, scheduledMode: .light,
+                                                lastEnforced: .dark, override: early,
+                                                nextBoundary: boundary)
+            t.check(held.enforce == nil && held.override?.reason == .earlySwitch,
+                    "early switch holds the mode until the boundary (suspended)")
+
+            // At the boundary the override expires and the schedule has itself
+            // reached Dark, so it rejoins seamlessly (enforce Dark, no override).
+            let rejoin = EnforcementEngine.decide(now: at(2024, 1, 10, 20, 1),
+                                                  currentMode: .dark, scheduledMode: .dark,
+                                                  lastEnforced: .dark, override: early,
+                                                  nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(rejoin.override == nil && rejoin.enforce == .dark,
+                    "at the boundary → override expires and schedule rejoins in Dark")
+
+            // Undoing it early ("Back to schedule") returns to the scheduled Light
+            // without a false manual divergence (lastEnforced tracks the held mode).
+            let undo = EnforcementEngine.decide(now: at(2024, 1, 10, 15, 0),
+                                                currentMode: .dark, scheduledMode: .light,
+                                                lastEnforced: .dark, override: nil,
+                                                nextBoundary: boundary)
+            t.check(undo.override == nil && undo.enforce == .light,
+                    "Back to schedule → enforce scheduled Light (no false override)")
+        }
+
         // --- Override migration: the Reason decoder tolerates unknown cases ---
         do {
             print("Override Reason decoding (migration-safe):")
