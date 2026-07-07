@@ -79,7 +79,8 @@ final class AppModel: ObservableObject {
     let locationService = LocationService()
     private let timeZone = TimeZone.current
 
-    private var timer: Timer?
+    private var timer: Timer?              // 60s safety-net poll
+    private var transitionTimer: Timer?    // one-shot, fires right at the next boundary
     private var wakeObserver: NSObjectProtocol?
 
     /// The mode the app believes it last put in effect (or accepted). Seeds the
@@ -124,6 +125,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         timer?.invalidate()
+        transitionTimer?.invalidate()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -180,6 +182,25 @@ final class AppModel: ObservableObject {
         self.timer = timer
     }
 
+    /// (Re)arm a one-shot timer to fire right at the next transition, so the
+    /// switch lands on time instead of waiting for the next 60s poll. Re-armed on
+    /// every tick (and thus on launch, wake, and settings changes); the periodic
+    /// timer remains the safety net for drift, sleep/wake, and clock changes.
+    private func scheduleTransitionTimer(for next: Transition?, now: Date) {
+        transitionTimer?.invalidate()
+        transitionTimer = nil
+        guard let delay = Scheduler.fireDelay(until: next, now: now) else { return }
+        let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                Log.scheduler.info("Transition boundary reached; re-evaluating")
+                self?.tick()
+            }
+        }
+        t.tolerance = 1
+        RunLoop.main.add(t, forMode: .common)
+        transitionTimer = t
+    }
+
     private func observeWake() {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
@@ -228,6 +249,7 @@ final class AppModel: ObservableObject {
             }
             scheduledMode = currentMode
             nextTransition = nil
+            scheduleTransitionTimer(for: nil, now: now)
             updateGlance()
             return
         }
@@ -235,6 +257,7 @@ final class AppModel: ObservableObject {
         scheduledMode = scheduler.desiredMode(at: now)
         let next = scheduler.nextTransition(after: now)
         nextTransition = next
+        scheduleTransitionTimer(for: next, now: now)
         let boundary = next?.date ?? now.addingTimeInterval(12 * 3600)
 
         let decision = EnforcementEngine.decide(now: now,

@@ -167,6 +167,19 @@ struct Scheduler {
         transitions(around: now).first(where: { $0.date > now })
     }
 
+    /// How long from `now` until enforcement should re-run to apply `transition`.
+    ///
+    /// Used to arm a one-shot timer that fires right at the boundary (so a switch
+    /// lands on time instead of waiting for the next periodic poll). A 1-second
+    /// cushion is added so the schedule has advanced past the boundary when we
+    /// re-evaluate. Returns nil when there's no upcoming transition, or it's
+    /// already due/past (the caller enforces immediately in that case).
+    static func fireDelay(until transition: Transition?, now: Date) -> TimeInterval? {
+        guard let transition else { return nil }
+        let delay = transition.date.timeIntervalSince(now) + 1
+        return delay > 0 ? delay : nil
+    }
+
     /// Polar / degenerate fallback: use today's raw NOAA geometry (sun mode) or a
     /// direct clock comparison (fixed mode) to pick a mode without transitions.
     private func polarFallbackMode(at now: Date) -> AppearanceMode {
