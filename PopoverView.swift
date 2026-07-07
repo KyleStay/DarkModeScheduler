@@ -8,7 +8,7 @@ import AppKit
 // re-evaluation happen in one place.
 //
 // Layout is ordered by how often a user needs it, top → bottom:
-//   Header (status) → Right now (pause + test) → Schedule → Location →
+//   Header (status) → Right now (pause + switch early) → Schedule → Location →
 //   Preferences → Quit.
 // =============================================================================
 
@@ -75,19 +75,10 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Right now").font(.subheadline).bold()
 
-            if model.isPreviewing {
-                HStack(spacing: 6) {
-                    Image(systemName: "eye.fill").foregroundStyle(.purple)
-                    Text("Previewing \(model.currentMode.label)")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Back to schedule") { model.resumeNow() }
-                        .controlSize(.small)
-                }
-            } else if let description = model.overrideDescription {
-                Label(description, systemImage: "pause.circle.fill")
+            if let description = model.overrideDescription {
+                Label(description, systemImage: model.isEarlySwitch ? "clock.arrow.circlepath" : "pause.circle.fill")
                     .font(.caption).foregroundStyle(.orange)
-                Button("Resume schedule now") { model.resumeNow() }
+                Button("Back to schedule") { model.resumeNow() }
                     .controlSize(.small)
             } else {
                 HStack(spacing: 6) {
@@ -104,28 +95,17 @@ struct PopoverView: View {
                     Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
                         .controlSize(.small)
                 }
-            }
-
-            // Preview (test) — always available: a quick way to confirm switching
-            // works without waiting for the schedule. Disables the one in effect.
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Test switch").font(.caption2).foregroundStyle(.secondary)
-                HStack {
-                    Button { model.previewAppearance(.light) } label: {
-                        Label("Preview Light", systemImage: "sun.max.fill")
-                    }
-                    .controlSize(.small)
-                    .disabled(model.isPreviewing && model.currentMode == .light)
-                    Button { model.previewAppearance(.dark) } label: {
-                        Label("Preview Dark", systemImage: "moon.stars.fill")
-                    }
-                    .controlSize(.small)
-                    .disabled(model.isPreviewing && model.currentMode == .dark)
+                // Bring the next scheduled change forward: switch to the upcoming
+                // mode now (also confirms switching works) instead of waiting for
+                // the boundary. Holds until then, then rejoins the schedule.
+                Button { model.switchToNextModeEarly() } label: {
+                    Label("Switch to \(model.earlySwitchTarget.label) now",
+                          systemImage: model.earlySwitchTarget.isDark ? "moon.stars.fill" : "sun.max.fill")
                 }
+                .controlSize(.small)
             }
-            .padding(.top, 2)
 
-            if let error = model.previewError {
+            if let error = model.earlySwitchError {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
             if model.permissionBlocked { permissionHint }

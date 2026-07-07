@@ -48,8 +48,8 @@ final class AppModel: ObservableObject {
     // MARK: Overrides / pause
     @Published private(set) var override: Override?
 
-    // MARK: Test switch (on-demand preview)
-    @Published private(set) var previewError: String?
+    // MARK: Switch early (bring the next scheduled change forward)
+    @Published private(set) var earlySwitchError: String?
 
     // MARK: Feature toggles
     @Published var notificationsEnabled = false
@@ -67,8 +67,8 @@ final class AppModel: ObservableObject {
     var scheduledDark: Bool { scheduledMode.isDark }
     var scheduleMatches: Bool { currentMode == scheduledMode }
     var isOverridden: Bool { override != nil }
-    /// True while an on-demand "Test switch" preview is holding the appearance.
-    var isPreviewing: Bool { override?.reason == .preview }
+    /// True while a "Switch early" override is holding the brought-forward mode.
+    var isEarlySwitch: Bool { override?.reason == .earlySwitch }
 
     // MARK: Collaborators
     private let settings = SettingsStore()
@@ -318,10 +318,14 @@ final class AppModel: ObservableObject {
     /// One-line summary for the menu bar's help/accessibility label.
     var glanceSummary: String {
         if let override, override.isActive(at: Date()) {
-            if override.reason == .preview {
+            switch override.reason {
+            case .earlySwitch:
+                return "\(currentMode.label) early — rejoins \(shortDateTime(override.until))"
+            case .preview:
                 return "Previewing \(currentMode.label) — Back to schedule"
+            default:
+                return "Paused — resumes \(shortDateTime(override.until))"
             }
-            return "Paused — resumes \(shortDateTime(override.until))"
         }
         if let next = nextTransition {
             return "Next: \(next.mode.label) at \(shortDateTime(next.date))"
@@ -338,27 +342,38 @@ final class AppModel: ObservableObject {
         case .pausedDuration:      return "Paused — resumes \(resumes)"
         case .pausedUntilBoundary: return "Paused until next transition — resumes \(resumes)"
         case .preview:             return "Previewing \(currentMode.label) (test switch)"
+        case .earlySwitch:         return "\(currentMode.label) early — rejoins schedule \(resumes)"
         }
     }
 
-    // MARK: - Test switch (on-demand preview)
+    /// The mode "Switch early" would move to: the next scheduled transition's
+    /// mode, or (when there's no schedule yet) simply the opposite of what's live.
+    var earlySwitchTarget: AppearanceMode {
+        nextTransition?.mode ?? (currentMode == .dark ? .light : .dark)
+    }
 
-    /// Apply an appearance immediately to test the switch, without waiting for the
-    /// schedule. Registers a `.preview` override so the scheduler SUSPENDS and
-    /// won't snap the appearance back on the next tick; "Back to schedule"
-    /// (`resumeNow`) clears it. Surfaces the `EnforceOutcome` via `previewError` /
-    /// `permissionBlocked`. Deliberately does NOT post a switch notification —
-    /// notifications are for real scheduled switches, not tests.
-    func previewAppearance(_ mode: AppearanceMode) {
-        previewError = nil
-        let outcome = appearance.apply(desired: mode)
+    // MARK: - Switch early (bring the next scheduled change forward)
+
+    /// Switch to the upcoming scheduled mode *now* instead of waiting for the
+    /// boundary. Applies it immediately (also confirming Automation works) and
+    /// registers an `.earlySwitch` override until that boundary, so the scheduler
+    /// SUSPENDS and won't snap back; when the boundary arrives the schedule would
+    /// have switched to this mode anyway, so it rejoins seamlessly. "Back to
+    /// schedule" (`resumeNow`) undoes it early. No notification — that's for real
+    /// scheduled switches. Surfaces the `EnforceOutcome` via `earlySwitchError` /
+    /// `permissionBlocked`.
+    func switchToNextModeEarly(now: Date = Date()) {
+        earlySwitchError = nil
+        let target = earlySwitchTarget
+        // Hold until the schedule catches up (the next boundary); fall back to a
+        // 12h window if there's no upcoming transition (e.g. sun mode w/o location).
+        let boundary = nextTransition?.date ?? now.addingTimeInterval(12 * 3600)
+        let outcome = appearance.apply(desired: target)
         switch outcome {
         case .applied(let applied), .unchanged(let applied):
             permissionBlocked = false
             lastEnforced = applied
-            // distantFuture: a preview never auto-expires on a tick — it holds
-            // until the user taps "Back to schedule". It's cleared on relaunch.
-            let ov = Override(reason: .preview, until: .distantFuture)
+            let ov = Override(reason: .earlySwitch, until: boundary)
             override = ov
             settings.override = ov
             syncNightShift(active: applied.isDark)
@@ -368,7 +383,7 @@ final class AppModel: ObservableObject {
             permissionBlocked = true
         case .failed(let code):
             permissionBlocked = false
-            previewError = "Couldn't switch the appearance (error \(code)). Try again."
+            earlySwitchError = "Couldn't switch the appearance (error \(code)). Try again."
         }
         currentMode = appearance.currentMode()
         updateGlance()
@@ -391,9 +406,9 @@ final class AppModel: ObservableObject {
     }
 
     private func setOverride(_ newValue: Override?) {
-        // Any override change (pause, resume, "Back to schedule") ends a preview
-        // interaction, so a stale preview error should not linger under the UI.
-        previewError = nil
+        // Any override change (pause, resume, "Back to schedule") ends the
+        // current action, so a stale error should not linger under the UI.
+        earlySwitchError = nil
         override = newValue
         settings.override = newValue
         tick()

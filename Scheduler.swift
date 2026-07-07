@@ -204,7 +204,8 @@ struct Override: Codable, Equatable {
         case manual              // user manually flipped appearance (detected divergence)
         case pausedDuration      // "Pause for 1 hour"
         case pausedUntilBoundary // "Pause until next sunrise/sunset"
-        case preview             // user is testing the switch on demand ("Test switch")
+        case preview             // legacy: on-demand appearance preview (superseded by earlySwitch)
+        case earlySwitch         // user brought the next scheduled switch forward ("Switch early")
 
         /// Decode leniently: any raw value this build doesn't recognize (a case
         /// added by a newer build, or one later renamed/removed) maps to
