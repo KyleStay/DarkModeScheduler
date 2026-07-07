@@ -433,6 +433,22 @@ struct SunCalculatorTestMain {
                     "Back to schedule → enforce scheduled Light (no false override)")
         }
 
+        // --- Transition fire-delay (arming the on-time boundary timer) ---
+        do {
+            print("Transition fire delay:")
+            let now = at(2024, 1, 10, 12, 0)
+            // No upcoming transition → nil (nothing to schedule).
+            t.check(Scheduler.fireDelay(until: nil, now: now) == nil, "nil transition → no timer")
+            // Future transition → (date − now) + 1s cushion.
+            let future = Transition(date: at(2024, 1, 10, 20, 0), mode: .dark)
+            if let delay = Scheduler.fireDelay(until: future, now: now) {
+                t.check(abs(delay - (8 * 3600 + 1)) < 0.001, "future transition → fires at boundary +1s")
+            } else { t.check(false, "future transition should yield a delay") }
+            // Past/already-due transition → nil (caller enforces immediately).
+            let past = Transition(date: at(2024, 1, 10, 11, 0), mode: .light)
+            t.check(Scheduler.fireDelay(until: past, now: now) == nil, "past transition → no timer")
+        }
+
         // --- Override migration: the Reason decoder tolerates unknown cases ---
         do {
             print("Override Reason decoding (migration-safe):")
