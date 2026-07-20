@@ -300,15 +300,20 @@ final class NotificationService {
         }
     }
 
-    /// Post a "Switched to X" notice. Best-effort; silently no-ops if unauthorized.
-    func postSwitch(to mode: AppearanceMode) {
+    /// Post one notice when at least one selected effect actually changed.
+    func postTransition(to phase: SchedulePhase, effects: ScheduleEffects) {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized ||
                   settings.authorizationStatus == .provisional else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Switched to \(mode.label)"
-            content.body = mode.isDark ? "Dark appearance is now on." : "Light appearance is now on."
+            content.title = "\(phase.label) effects applied"
+            let names = [effects.darkAppearance ? "appearance" : nil,
+                         effects.nightShift ? "Night Shift" : nil]
+                .compactMap { $0 }
+                .joined(separator: " and ")
+            content.body = names.isEmpty ? "The schedule reached a new phase."
+                                         : "Updated \(names) for \(phase.label.lowercased())."
             let request = UNNotificationRequest(identifier: UUID().uuidString,
                                                 content: content, trigger: nil)
             center.add(request) { error in
@@ -327,6 +332,8 @@ final class NotificationService {
 protocol NightShiftControlling {
     /// Whether the underlying mechanism is present on this macOS.
     var isAvailable: Bool { get }
+    /// Applied warmth when CoreBrightness can report it; nil on guarded failure.
+    var activeState: Bool? { get }
     /// Turn warm mode on/off. Returns true iff the call was applied.
     @discardableResult func setActive(_ active: Bool) -> Bool
 }
@@ -341,8 +348,37 @@ final class CoreBrightnessNightShift: NightShiftControlling {
 
     private typealias SetEnabledIMP = @convention(c) (AnyObject, Selector, ObjCBool) -> ObjCBool
 
+    private typealias GetStatusIMP = @convention(c) (
+        AnyObject, Selector, UnsafeMutableRawPointer
+    ) -> ObjCBool
+    private typealias SupportedIMP = @convention(c) (AnyObject, Selector) -> ObjCBool
+
+    private struct BlueLightTime {
+        var hour: Int32 = 0
+        var minute: Int32 = 0
+    }
+
+    private struct BlueLightSchedule {
+        var from = BlueLightTime()
+        var to = BlueLightTime()
+    }
+
+    /// Layout encoded by `getBlueLightStatus:` on supported CoreBrightness
+    /// versions. The selector and every call remain runtime-guarded.
+    private struct BlueLightStatus {
+        var active: Int8 = 0
+        var enabled: Int8 = 0
+        var scheduleAllowed: Int8 = 0
+        var mode: Int32 = 0
+        var schedule = BlueLightSchedule()
+        var disableFlags: UInt64 = 0
+        var available: Int8 = 0
+    }
+
     private let client: NSObject?
     private let setEnabledSel = NSSelectorFromString("setEnabled:")
+    private let getStatusSel = NSSelectorFromString("getBlueLightStatus:")
+    private let supportedSel = NSSelectorFromString("supported")
 
     init() {
         // The private CoreBrightness framework isn't linked, so its classes are
@@ -362,8 +398,20 @@ final class CoreBrightnessNightShift: NightShiftControlling {
             return
         }
         let instance = cls.init()
-        guard instance.responds(to: setEnabledSel) else {
-            Log.nightshift.info("CBBlueLightClient missing setEnabled:; Night Shift unavailable")
+        guard instance.responds(to: setEnabledSel),
+              instance.responds(to: getStatusSel),
+              instance.responds(to: supportedSel),
+              let supportedMethod = class_getInstanceMethod(type(of: instance), supportedSel)
+        else {
+            Log.nightshift.info("CBBlueLightClient API incomplete; Night Shift unavailable")
+            client = nil
+            return
+        }
+        let supported = unsafeBitCast(
+            method_getImplementation(supportedMethod), to: SupportedIMP.self
+        )(instance, supportedSel)
+        guard supported.boolValue else {
+            Log.nightshift.info("CBBlueLightClient reports Night Shift unsupported")
             client = nil
             return
         }
@@ -372,6 +420,22 @@ final class CoreBrightnessNightShift: NightShiftControlling {
     }
 
     var isAvailable: Bool { client != nil }
+
+    var activeState: Bool? {
+        guard let client,
+              let method = class_getInstanceMethod(type(of: client), getStatusSel)
+        else { return nil }
+        let fn = unsafeBitCast(method_getImplementation(method), to: GetStatusIMP.self)
+        var status = BlueLightStatus()
+        let ok = withUnsafeMutablePointer(to: &status) { pointer in
+            fn(client, getStatusSel, UnsafeMutableRawPointer(pointer))
+        }
+        guard ok.boolValue, status.available != 0 else {
+            Log.nightshift.info("getBlueLightStatus: failed")
+            return nil
+        }
+        return status.active != 0
+    }
 
     @discardableResult
     func setActive(_ active: Bool) -> Bool {

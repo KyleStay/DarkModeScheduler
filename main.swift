@@ -18,10 +18,10 @@ struct DarkModeSchedulerApp: App {
         MenuBarExtra {
             PopoverView().environmentObject(model)
         } label: {
-            // Feature 7 — menu-bar glance: the icon reflects the live appearance,
-            // and the next transition (mode + time) is surfaced without opening
+            // The icon reflects the schedule phase, while the next boundary is
+            // surfaced without opening
             // the popover via the item's help tooltip and accessibility label.
-            Image(systemName: model.currentMode.isDark ? "moon.stars" : "sun.max")
+            Image(systemName: model.scheduledNight ? "moon.stars" : "sun.max")
                 .help(model.glanceSummary)
                 .accessibilityLabel(model.glanceSummary)
         }
@@ -67,23 +67,23 @@ enum SelfTest {
             cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
         }
 
-        // Fixed-mode boundary logic: Dark 20:00, Light 07:00.
-        let fixed = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: tz)
-        check(fixed.desiredMode(at: at(2024, 6, 1, 21, 0)) == .dark, "fixed: 21:00 is Dark")
-        check(fixed.desiredMode(at: at(2024, 6, 1, 12, 0)) == .light, "fixed: 12:00 is Light")
-        check(fixed.desiredMode(at: at(2024, 6, 1, 3, 0)) == .dark, "fixed: 03:00 is Dark")
+        // Fixed-mode boundary logic: nighttime 20:00, daytime 07:00.
+        let fixed = Scheduler(config: .fixed(nighttimeMinutes: 20 * 60, daytimeMinutes: 7 * 60), timeZone: tz)
+        check(fixed.desiredPhase(at: at(2024, 6, 1, 21, 0)) == .night, "fixed: 21:00 is nighttime")
+        check(fixed.desiredPhase(at: at(2024, 6, 1, 12, 0)) == .day, "fixed: 12:00 is daytime")
+        check(fixed.desiredPhase(at: at(2024, 6, 1, 3, 0)) == .night, "fixed: 03:00 is nighttime")
         if let next = fixed.nextTransition(after: at(2024, 6, 1, 12, 0)) {
-            check(next.mode == .dark, "fixed: next after noon is Dark")
+            check(next.phase == .night, "fixed: next after noon is Dark")
         } else { check(false, "fixed: expected a next transition") }
 
         // Sun-mode offsets: Dark 30m before sunset must precede the un-offset sunset.
         let plain = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
-                                           darkOffsetMinutes: 0, lightOffsetMinutes: 0), timeZone: tz)
+                                           nighttimeOffsetMinutes: 0, daytimeOffsetMinutes: 0), timeZone: tz)
         let shifted = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
-                                             darkOffsetMinutes: -30, lightOffsetMinutes: 15), timeZone: tz)
+                                             nighttimeOffsetMinutes: -30, daytimeOffsetMinutes: 15), timeZone: tz)
         let noon = at(2024, 6, 1, 12, 0)
-        if let plainDark = plain.transitions(around: noon).first(where: { $0.mode == .dark && $0.date > noon }),
-           let shiftDark = shifted.transitions(around: noon).first(where: { $0.mode == .dark && $0.date > noon }) {
+        if let plainDark = plain.transitions(around: noon).first(where: { $0.phase == .night && $0.date > noon }),
+           let shiftDark = shifted.transitions(around: noon).first(where: { $0.phase == .night && $0.date > noon }) {
             let delta = plainDark.date.timeIntervalSince(shiftDark.date)
             check(abs(delta - 1800) < 1, "sun: -30m dark offset lands 30m before sunset")
         } else { check(false, "sun: could not find dark transitions") }
@@ -93,26 +93,42 @@ enum SelfTest {
         check(ov.isActive(at: at(2024, 6, 1, 12, 30)), "override: active before expiry")
         check(!ov.isActive(at: at(2024, 6, 1, 13, 30)), "override: expired after until")
 
-        // State machine: manual divergence → suspend, then expiry → enforce.
+        // Effects are selected independently from the schedule phase.
         let boundary = at(2024, 6, 1, 20, 0)
         let d1 = EnforcementEngine.decide(now: at(2024, 6, 1, 12, 0),
-                                          currentMode: .dark, scheduledMode: .light,
-                                          lastEnforced: .light, override: nil, nextBoundary: boundary)
-        check(d1.enforce == nil && d1.override?.reason == .manual,
+                                          phase: .day,
+                                          effects: .defaults,
+                                          nightShiftAvailable: true,
+                                          currentAppearance: .dark,
+                                          lastAppearanceBaseline: .light,
+                                          override: nil, nextBoundary: boundary)
+        check(d1.appearance == nil && d1.override?.reason == .manual,
               "engine: manual flip → suspend with .manual override")
         let d2 = EnforcementEngine.decide(now: at(2024, 6, 1, 12, 1),
-                                          currentMode: .dark, scheduledMode: .light,
-                                          lastEnforced: .dark, override: d1.override, nextBoundary: boundary)
-        check(d2.enforce == nil, "engine: still suspended before boundary")
+                                          phase: .day, effects: .defaults,
+                                          nightShiftAvailable: true,
+                                          currentAppearance: .dark,
+                                          lastAppearanceBaseline: .dark,
+                                          override: d1.override, nextBoundary: boundary)
+        check(d2.appearance == nil && d2.nightShift == nil,
+              "engine: pause suspends every effect")
         let d3 = EnforcementEngine.decide(now: at(2024, 6, 1, 20, 1),
-                                          currentMode: .dark, scheduledMode: .dark,
-                                          lastEnforced: .dark, override: d1.override, nextBoundary: boundary)
-        check(d3.override == nil && d3.enforce == .dark, "engine: after boundary → resume & enforce")
-        // Schedule advancing (not a manual flip) must enforce, not suspend.
+                                          phase: .night, effects: .defaults,
+                                          nightShiftAvailable: true,
+                                          currentAppearance: .dark,
+                                          lastAppearanceBaseline: .dark,
+                                          override: d1.override, nextBoundary: boundary)
+        check(d3.override == nil && d3.appearance == .dark,
+              "engine: after boundary → resume & reconcile")
         let d4 = EnforcementEngine.decide(now: at(2024, 6, 1, 20, 5),
-                                          currentMode: .light, scheduledMode: .dark,
-                                          lastEnforced: .light, override: nil, nextBoundary: boundary)
-        check(d4.enforce == .dark && d4.override == nil, "engine: schedule advance → enforce (no false override)")
+                                          phase: .night,
+                                          effects: ScheduleEffects(darkAppearance: false, nightShift: true),
+                                          nightShiftAvailable: true,
+                                          currentAppearance: .light,
+                                          lastAppearanceBaseline: .dark,
+                                          override: nil, nextBoundary: boundary)
+        check(d4.appearance == nil && d4.nightShift == true && d4.override == nil,
+              "engine: Night Shift-only nighttime leaves appearance untouched")
 
         return failures
     }

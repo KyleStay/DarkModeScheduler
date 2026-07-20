@@ -111,13 +111,17 @@ struct SettingsStore {
     private enum Key {
         static let location = "resolvedLocation"
         static let scheduleMode = "scheduleMode"
-        static let fixedDarkMinutes = "fixedDarkMinutes"
-        static let fixedLightMinutes = "fixedLightMinutes"
-        static let darkOffsetMinutes = "darkOffsetMinutes"
-        static let lightOffsetMinutes = "lightOffsetMinutes"
+        // Keep the pre-2.8 storage names so existing schedules migrate in place.
+        static let fixedNighttimeMinutes = "fixedDarkMinutes"
+        static let fixedDaytimeMinutes = "fixedLightMinutes"
+        static let nighttimeOffsetMinutes = "darkOffsetMinutes"
+        static let daytimeOffsetMinutes = "lightOffsetMinutes"
         static let locationSource = "locationSource"
         static let notificationsEnabled = "notificationsEnabled"
+        static let darkAppearanceEnabled = "darkAppearanceEnabled"
         static let nightShiftEnabled = "nightShiftEnabled"
+        static let nightShiftOwnedActive = "nightShiftOwnedActive"
+        static let nightShiftCleanupPending = "nightShiftCleanupPending"
         static let override = "override"
     }
 
@@ -151,26 +155,26 @@ struct SettingsStore {
     // MARK: Fixed times (minutes since local midnight)
 
     /// Default fixed schedule: Dark at 20:00, Light at 07:00.
-    var fixedDarkMinutes: Int {
-        get { defaults.object(forKey: Key.fixedDarkMinutes) as? Int ?? 20 * 60 }
-        nonmutating set { defaults.set(clampMinuteOfDay(newValue), forKey: Key.fixedDarkMinutes) }
+    var fixedNighttimeMinutes: Int {
+        get { defaults.object(forKey: Key.fixedNighttimeMinutes) as? Int ?? 20 * 60 }
+        nonmutating set { defaults.set(clampMinuteOfDay(newValue), forKey: Key.fixedNighttimeMinutes) }
     }
 
-    var fixedLightMinutes: Int {
-        get { defaults.object(forKey: Key.fixedLightMinutes) as? Int ?? 7 * 60 }
-        nonmutating set { defaults.set(clampMinuteOfDay(newValue), forKey: Key.fixedLightMinutes) }
+    var fixedDaytimeMinutes: Int {
+        get { defaults.object(forKey: Key.fixedDaytimeMinutes) as? Int ?? 7 * 60 }
+        nonmutating set { defaults.set(clampMinuteOfDay(newValue), forKey: Key.fixedDaytimeMinutes) }
     }
 
     // MARK: Sun offsets (minutes; +/- offsetRange)
 
-    var darkOffsetMinutes: Int {
-        get { defaults.object(forKey: Key.darkOffsetMinutes) as? Int ?? 0 }
-        nonmutating set { defaults.set(clampOffset(newValue), forKey: Key.darkOffsetMinutes) }
+    var nighttimeOffsetMinutes: Int {
+        get { defaults.object(forKey: Key.nighttimeOffsetMinutes) as? Int ?? 0 }
+        nonmutating set { defaults.set(clampOffset(newValue), forKey: Key.nighttimeOffsetMinutes) }
     }
 
-    var lightOffsetMinutes: Int {
-        get { defaults.object(forKey: Key.lightOffsetMinutes) as? Int ?? 0 }
-        nonmutating set { defaults.set(clampOffset(newValue), forKey: Key.lightOffsetMinutes) }
+    var daytimeOffsetMinutes: Int {
+        get { defaults.object(forKey: Key.daytimeOffsetMinutes) as? Int ?? 0 }
+        nonmutating set { defaults.set(clampOffset(newValue), forKey: Key.daytimeOffsetMinutes) }
     }
 
     // MARK: Location source
@@ -187,9 +191,33 @@ struct SettingsStore {
         nonmutating set { defaults.set(newValue, forKey: Key.notificationsEnabled) }
     }
 
+    /// Missing on builds through 2.7, where Dark appearance was mandatory.
+    /// Defaulting absent storage to true preserves every existing schedule.
+    var darkAppearanceEnabled: Bool {
+        get { defaults.object(forKey: Key.darkAppearanceEnabled) as? Bool ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Key.darkAppearanceEnabled) }
+    }
+
     var nightShiftEnabled: Bool {
         get { defaults.bool(forKey: Key.nightShiftEnabled) }      // default false
         nonmutating set { defaults.set(newValue, forKey: Key.nightShiftEnabled) }
+    }
+
+    /// Internal recovery state. Ownership is set only after the app proves it
+    /// changed Night Shift on, so user-owned warmth is preserved on opt-out.
+    var nightShiftOwnedActive: Bool {
+        get { defaults.bool(forKey: Key.nightShiftOwnedActive) }
+        nonmutating set { defaults.set(newValue, forKey: Key.nightShiftOwnedActive) }
+    }
+
+    var nightShiftCleanupPending: Bool {
+        get { defaults.bool(forKey: Key.nightShiftCleanupPending) }
+        nonmutating set { defaults.set(newValue, forKey: Key.nightShiftCleanupPending) }
+    }
+
+    var scheduleEffects: ScheduleEffects {
+        ScheduleEffects(darkAppearance: darkAppearanceEnabled,
+                        nightShift: nightShiftEnabled)
     }
 
     // MARK: Override (persisted across relaunch)

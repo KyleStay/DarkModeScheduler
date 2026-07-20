@@ -205,19 +205,19 @@ struct SunCalculatorTestMain {
             let base = SunCalculator.sunTimes(latitude: 40.71, longitude: -74.0,
                                               date: noon(day(2024, 6, 1), nyTZ), timeZone: nyTZ)
             let sched = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
-                                               darkOffsetMinutes: -30, lightOffsetMinutes: 15),
+                                               nighttimeOffsetMinutes: -30, daytimeOffsetMinutes: 15),
                                   timeZone: nyTZ)
             let dayStart = midnight(2024, 6, 1)
             let dayEnd = midnight(2024, 6, 2)
             let onDay = sched.transitions(around: noon(day(2024, 6, 1), nyTZ))
                 .filter { $0.date >= dayStart && $0.date < dayEnd }
             if case .time(let sunset) = base.sunset,
-               let dark = onDay.first(where: { $0.mode == .dark }) {
+               let dark = onDay.first(where: { $0.phase == .night }) {
                 let delta = sunset.timeIntervalSince(dark.date)
                 t.check(abs(delta - 1800) < 30, "dark offset lands 30m before sunset (Δ \(Int(delta))s)")
             } else { t.check(false, "offset: found dark transition on day") }
             if case .time(let sunrise) = base.sunrise,
-               let light = onDay.first(where: { $0.mode == .light }) {
+               let light = onDay.first(where: { $0.phase == .day }) {
                 let delta = light.date.timeIntervalSince(sunrise)
                 t.check(abs(delta - 900) < 30, "light offset lands 15m after sunrise (Δ \(Int(delta))s)")
             } else { t.check(false, "offset: found light transition on day") }
@@ -226,47 +226,47 @@ struct SunCalculatorTestMain {
         // --- Fixed-schedule boundary logic (feature 2) ---
         do {
             print("Fixed schedule — Dark 20:00 / Light 07:00:")
-            let s = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
-            t.check(s.desiredMode(at: at(2024, 1, 10, 21, 0)) == .dark, "21:00 → Dark")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 6, 59)) == .dark, "06:59 → Dark")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 7, 1)) == .light, "07:01 → Light")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 19, 59)) == .light, "19:59 → Light")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 0, 30)) == .dark, "00:30 → Dark")
+            let s = Scheduler(config: .fixed(nighttimeMinutes: 20 * 60, daytimeMinutes: 7 * 60), timeZone: nyTZ)
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 21, 0)) == .night, "21:00 → Dark")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 6, 59)) == .night, "06:59 → Dark")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 7, 1)) == .day, "07:01 → Light")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 19, 59)) == .day, "19:59 → Light")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 0, 30)) == .night, "00:30 → Dark")
         }
 
         // --- Degenerate fixed schedule (Dark time == Light time) is deterministic ---
         do {
             print("Fixed schedule (degenerate) — Dark == Light == 07:00:")
-            let s = Scheduler(config: .fixed(darkMinutes: 7 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
-            t.check(s.desiredMode(at: at(2024, 1, 10, 12, 0)) == .light, "equal times → Light (deterministic)")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 23, 0)) == .light, "equal times → Light late in day")
+            let s = Scheduler(config: .fixed(nighttimeMinutes: 7 * 60, daytimeMinutes: 7 * 60), timeZone: nyTZ)
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 12, 0)) == .day, "equal times → Light (deterministic)")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 23, 0)) == .day, "equal times → Light late in day")
         }
 
         // --- Inverted fixed schedule (Dark before Light within the day) ---
         do {
             print("Fixed schedule (inverted) — Dark 09:00 / Light 18:00:")
-            let s = Scheduler(config: .fixed(darkMinutes: 9 * 60, lightMinutes: 18 * 60), timeZone: nyTZ)
-            t.check(s.desiredMode(at: at(2024, 1, 10, 12, 0)) == .dark, "12:00 → Dark (between)")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 20, 0)) == .light, "20:00 → Light (after)")
-            t.check(s.desiredMode(at: at(2024, 1, 10, 6, 0)) == .light, "06:00 → Light (before)")
+            let s = Scheduler(config: .fixed(nighttimeMinutes: 9 * 60, daytimeMinutes: 18 * 60), timeZone: nyTZ)
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 12, 0)) == .night, "12:00 → Dark (between)")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 20, 0)) == .day, "20:00 → Light (after)")
+            t.check(s.desiredPhase(at: at(2024, 1, 10, 6, 0)) == .day, "06:00 → Light (before)")
         }
 
         // --- Fixed times are DST-anchored to wall-clock, not elapsed seconds ---
         do {
             print("Fixed schedule DST anchoring — America/New_York:")
-            let s = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
+            let s = Scheduler(config: .fixed(nighttimeMinutes: 20 * 60, daytimeMinutes: 7 * 60), timeZone: nyTZ)
             // Spring-forward day (clocks jump 02:00→03:00). A raw midnight+7h would
             // land at 08:00; the fix must keep the Light transition at 07:00.
             let springNoon = at(2024, 3, 10, 12, 0)
             if let light = s.transitions(around: springNoon)
-                .first(where: { nyCal.isDate($0.date, inSameDayAs: springNoon) && $0.mode == .light }) {
+                .first(where: { nyCal.isDate($0.date, inSameDayAs: springNoon) && $0.phase == .day }) {
                 let c = nyCal.dateComponents([.hour, .minute], from: light.date)
                 t.check(c.hour == 7 && c.minute == 0, "spring-forward Light stays 07:00 (got \(c.hour ?? -1):\(c.minute ?? -1))")
             } else { t.check(false, "DST: found spring-forward Light transition") }
             // Fall-back day (clocks 02:00→01:00). Dark at 20:00 must stay 20:00.
             let fallNoon = at(2024, 11, 3, 12, 0)
             if let dark = s.transitions(around: fallNoon)
-                .first(where: { nyCal.isDate($0.date, inSameDayAs: fallNoon) && $0.mode == .dark }) {
+                .first(where: { nyCal.isDate($0.date, inSameDayAs: fallNoon) && $0.phase == .night }) {
                 let c = nyCal.dateComponents([.hour, .minute], from: dark.date)
                 t.check(c.hour == 20 && c.minute == 0, "fall-back Dark stays 20:00 (got \(c.hour ?? -1):\(c.minute ?? -1))")
             } else { t.check(false, "DST: found fall-back Dark transition") }
@@ -275,22 +275,22 @@ struct SunCalculatorTestMain {
         // --- Next-transition computation (both modes) ---
         do {
             print("Next transition:")
-            let fixed = Scheduler(config: .fixed(darkMinutes: 20 * 60, lightMinutes: 7 * 60), timeZone: nyTZ)
+            let fixed = Scheduler(config: .fixed(nighttimeMinutes: 20 * 60, daytimeMinutes: 7 * 60), timeZone: nyTZ)
             if let next = fixed.nextTransition(after: at(2024, 1, 10, 12, 0)) {
                 let comps = nyCal.dateComponents([.hour, .minute], from: next.date)
-                t.check(next.mode == .dark && comps.hour == 20 && comps.minute == 0,
+                t.check(next.phase == .night && comps.hour == 20 && comps.minute == 0,
                         "fixed: next after 12:00 is Dark@20:00")
             } else { t.check(false, "fixed: expected a next transition") }
             if let next = fixed.nextTransition(after: at(2024, 1, 10, 21, 0)) {
                 let comps = nyCal.dateComponents([.hour, .minute], from: next.date)
-                t.check(next.mode == .light && comps.hour == 7,
+                t.check(next.phase == .day && comps.hour == 7,
                         "fixed: next after 21:00 is Light@07:00 (next day)")
             } else { t.check(false, "fixed: expected a next transition after 21:00") }
 
             let sun = Scheduler(config: .sun(latitude: 40.71, longitude: -74.0,
-                                             darkOffsetMinutes: 0, lightOffsetMinutes: 0), timeZone: nyTZ)
+                                             nighttimeOffsetMinutes: 0, daytimeOffsetMinutes: 0), timeZone: nyTZ)
             if let next = sun.nextTransition(after: at(2024, 6, 1, 12, 0)) {
-                t.check(next.mode == .dark, "sun: next after noon is Dark (sunset)")
+                t.check(next.phase == .night, "sun: next after noon is Dark (sunset)")
             } else { t.check(false, "sun: expected a next transition") }
         }
 
@@ -303,134 +303,146 @@ struct SunCalculatorTestMain {
             t.check(!ov.isActive(at: at(2024, 1, 10, 14, 0)), "expired after until")
         }
 
-        // --- Enforcement state machine (feature 1, the crux) ---
+        // --- Phase/effect selection and enforcement state machine ---
         do {
-            print("Enforcement engine:")
+            print("Schedule effects engine:")
             let boundary = at(2024, 1, 10, 20, 0)
-            // Manual flip: live ≠ scheduled AND live ≠ lastEnforced → suspend w/ .manual.
-            let manual = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
-                                                  currentMode: .dark, scheduledMode: .light,
-                                                  lastEnforced: .light, override: nil, nextBoundary: boundary)
-            t.check(manual.enforce == nil && manual.override?.reason == .manual,
-                    "manual flip → suspend with .manual override until boundary")
-            t.check(manual.override?.until == boundary, "manual override expires at next boundary")
+            let darkOnly = ScheduleEffects(darkAppearance: true, nightShift: false)
+            let nightShiftOnly = ScheduleEffects(darkAppearance: false, nightShift: true)
+            let combined = ScheduleEffects(darkAppearance: true, nightShift: true)
+            let neither = ScheduleEffects(darkAppearance: false, nightShift: false)
 
-            // Still suspended before expiry, even if user flips again.
-            let stillPaused = EnforcementEngine.decide(now: at(2024, 1, 10, 15, 0),
-                                                       currentMode: .light, scheduledMode: .light,
-                                                       lastEnforced: .dark, override: manual.override,
-                                                       nextBoundary: boundary)
-            t.check(stillPaused.enforce == nil, "override active → stays suspended")
+            let nightOnlyNight = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 21, 0), phase: .night,
+                effects: nightShiftOnly, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .dark,
+                override: nil, nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(nightOnlyNight.appearance == nil && nightOnlyNight.nightShift == true,
+                    "Night Shift-only nighttime turns warmth on and leaves Light appearance untouched")
+            t.check(nightOnlyNight.override == nil,
+                    "Night Shift-only Light appearance is not a false manual override")
 
-            // After a timed pause expires (user untouched, so lastEnforced tracks
-            // the appearance we set), we resume and enforce the schedule.
-            let timedPause = Override(reason: .pausedDuration, until: at(2024, 1, 10, 13, 0))
-            let resumed = EnforcementEngine.decide(now: at(2024, 1, 10, 13, 1),
-                                                   currentMode: .light, scheduledMode: .dark,
-                                                   lastEnforced: .light, override: timedPause,
-                                                   nextBoundary: boundary)
-            t.check(resumed.override == nil && resumed.enforce == .dark,
-                    "expired override → resume & enforce schedule")
+            let nightOnlyDay = EnforcementEngine.decide(
+                now: at(2024, 1, 11, 8, 0), phase: .day,
+                effects: nightShiftOnly, nightShiftAvailable: true,
+                currentAppearance: .dark, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: at(2024, 1, 11, 20, 0))
+            t.check(nightOnlyDay.appearance == nil && nightOnlyDay.nightShift == false,
+                    "Night Shift-only daytime turns warmth off without changing Dark appearance")
 
-            // Nuance: if the user re-flips appearance exactly as an override
-            // expires, that fresh divergence becomes a new manual override.
-            let reflip = EnforcementEngine.decide(now: at(2024, 1, 10, 13, 1),
-                                                  currentMode: .dark, scheduledMode: .light,
-                                                  lastEnforced: .light, override: timedPause,
-                                                  nextBoundary: boundary)
-            t.check(reflip.enforce == nil && reflip.override?.reason == .manual,
-                    "re-flip at expiry → new manual override (not snapped back)")
+            let dark = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 21, 0), phase: .night,
+                effects: darkOnly, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(dark.appearance == .dark && dark.nightShift == nil,
+                    "Dark-only nighttime enforces Dark without Night Shift")
 
-            // Schedule merely advancing past a boundary is NOT a manual flip.
-            let advance = EnforcementEngine.decide(now: at(2024, 1, 10, 20, 1),
-                                                   currentMode: .light, scheduledMode: .dark,
-                                                   lastEnforced: .light, override: nil, nextBoundary: boundary)
-            t.check(advance.override == nil && advance.enforce == .dark,
-                    "schedule advance → enforce (no false manual override)")
+            let both = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 21, 0), phase: .night,
+                effects: combined, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(both.appearance == .dark && both.nightShift == true,
+                    "combined nighttime reconciles both effects")
 
-            // Matching state: idempotent enforce, no override.
-            let match = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
-                                                 currentMode: .light, scheduledMode: .light,
-                                                 lastEnforced: .light, override: nil, nextBoundary: boundary)
-            t.check(match.enforce == .light && match.override == nil, "matched state → enforce (no-op) no override")
+            let empty = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 21, 0), phase: .night,
+                effects: neither, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .dark,
+                override: nil, nextBoundary: boundary)
+            t.check(empty.appearance == nil && empty.nightShift == nil && empty.override == nil,
+                    "neither selected produces no mutations or false override")
 
-            // Timed pause suspends regardless of appearance agreement.
-            let paused = Override(reason: .pausedDuration, until: at(2024, 1, 10, 13, 0))
-            let timed = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
-                                                 currentMode: .light, scheduledMode: .dark,
-                                                 lastEnforced: .light, override: paused, nextBoundary: boundary)
-            t.check(timed.enforce == nil && timed.override?.reason == .pausedDuration,
-                    "timed pause → suspend even when schedule wants a change")
-        }
+            let unavailable = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 21, 0), phase: .night,
+                effects: combined, nightShiftAvailable: false,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: boundary)
+            t.check(unavailable.appearance == .dark && unavailable.nightShift == nil,
+                    "unavailable Night Shift disables only that effect")
 
-        // --- Test switch: the .preview override (on-demand preview) ---
-        do {
-            print("Test switch (.preview override):")
-            let boundary = at(2024, 1, 10, 20, 0)
+            let manual = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 12, 0), phase: .day,
+                effects: darkOnly, nightShiftAvailable: true,
+                currentAppearance: .dark, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: boundary)
+            t.check(manual.appearance == nil && manual.override?.reason == .manual,
+                    "manual Dark appearance divergence pauses the schedule")
 
-            // A preview override uses a far-future `until`, so it stays active
-            // across ticks (it's cleared on relaunch / by "Back to schedule",
-            // never by expiry).
-            let preview = Override(reason: .preview, until: .distantFuture)
-            t.check(preview.isActive(at: at(2024, 1, 10, 12, 0)), "preview override active now")
-            t.check(preview.isActive(at: at(2124, 1, 10, 12, 0)), "preview override still active a century later")
+            let pause = Override(reason: .pausedDuration, until: at(2024, 1, 10, 13, 0))
+            let paused = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 12, 30), phase: .day,
+                effects: combined, nightShiftAvailable: true,
+                currentAppearance: .dark, lastAppearanceBaseline: .light,
+                override: pause, nextBoundary: boundary)
+            t.check(paused.appearance == nil && paused.nightShift == nil,
+                    "pause suspends every scheduled effect")
 
-            // decide SUSPENDS under an active .preview override: no enforcement,
-            // the override is preserved, and the previewed appearance is accepted
-            // as the new baseline (so it is never snapped back).
-            let suspended = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
-                                                     currentMode: .dark, scheduledMode: .light,
-                                                     lastEnforced: .dark, override: preview,
-                                                     nextBoundary: boundary)
-            t.check(suspended.enforce == nil, "preview override → enforcement suspended (no snap-back)")
-            t.check(suspended.override?.reason == .preview, "preview override preserved while active")
-            t.check(suspended.lastEnforced == .dark, "preview accepts the previewed appearance as baseline")
+            let resumed = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 13, 1), phase: .day,
+                effects: combined, nightShiftAvailable: true,
+                currentAppearance: .dark, lastAppearanceBaseline: .dark,
+                override: pause, nextBoundary: boundary)
+            t.check(resumed.override == nil && resumed.appearance == .light && resumed.nightShift == false,
+                    "expired pause resumes and reconciles every enabled effect")
 
-            // Clearing the override (e.g. "Back to schedule") resumes enforcement.
-            // Because the app set lastEnforced to the previewed mode, this is NOT
-            // mistaken for a manual divergence — it cleanly enforces the schedule.
-            let resumed = EnforcementEngine.decide(now: at(2024, 1, 10, 12, 0),
-                                                   currentMode: .dark, scheduledMode: .light,
-                                                   lastEnforced: .dark, override: nil,
-                                                   nextBoundary: boundary)
-            t.check(resumed.override == nil && resumed.enforce == .light,
-                    "clearing preview → enforce schedule (no false manual override)")
-        }
-
-        // --- Switch early: bring the next scheduled change forward ---
-        do {
-            print("Switch early (.earlySwitch override):")
-            // Daytime: schedule is Light now, next transition is Dark at 20:00.
-            // Switching to Dark early holds it until that boundary via an
-            // .earlySwitch override, then the schedule (now Dark) takes over.
-            let boundary = at(2024, 1, 10, 20, 0)
             let early = Override(reason: .earlySwitch, until: boundary)
+            let held = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 15, 0), phase: .day,
+                effects: nightShiftOnly, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: early, nextBoundary: boundary)
+            t.check(held.appearance == nil && held.nightShift == nil,
+                    "switch-early override holds selected effects until the boundary")
+            let rejoin = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 20, 1), phase: .night,
+                effects: nightShiftOnly, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: early, nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(rejoin.override == nil && rejoin.appearance == nil && rejoin.nightShift == true,
+                    "switch early rejoins a Night Shift-only schedule at expiry")
 
-            // Before the boundary: suspended, holding the brought-forward Dark.
-            let held = EnforcementEngine.decide(now: at(2024, 1, 10, 15, 0),
-                                                currentMode: .dark, scheduledMode: .light,
-                                                lastEnforced: .dark, override: early,
-                                                nextBoundary: boundary)
-            t.check(held.enforce == nil && held.override?.reason == .earlySwitch,
-                    "early switch holds the mode until the boundary (suspended)")
+            let wakeReconcile = EnforcementEngine.decide(
+                now: at(2024, 1, 10, 20, 5), phase: .night,
+                effects: combined, nightShiftAvailable: true,
+                currentAppearance: .light, lastAppearanceBaseline: .light,
+                override: nil, nextBoundary: at(2024, 1, 11, 7, 0))
+            t.check(wakeReconcile.appearance == .dark && wakeReconcile.nightShift == true,
+                    "wake after a boundary reconciles the current phase")
 
-            // At the boundary the override expires and the schedule has itself
-            // reached Dark, so it rejoins seamlessly (enforce Dark, no override).
-            let rejoin = EnforcementEngine.decide(now: at(2024, 1, 10, 20, 1),
-                                                  currentMode: .dark, scheduledMode: .dark,
-                                                  lastEnforced: .dark, override: early,
-                                                  nextBoundary: at(2024, 1, 11, 7, 0))
-            t.check(rejoin.override == nil && rejoin.enforce == .dark,
-                    "at the boundary → override expires and schedule rejoins in Dark")
-
-            // Undoing it early ("Back to schedule") returns to the scheduled Light
-            // without a false manual divergence (lastEnforced tracks the held mode).
-            let undo = EnforcementEngine.decide(now: at(2024, 1, 10, 15, 0),
-                                                currentMode: .dark, scheduledMode: .light,
-                                                lastEnforced: .dark, override: nil,
-                                                nextBoundary: boundary)
-            t.check(undo.override == nil && undo.enforce == .light,
-                    "Back to schedule → enforce scheduled Light (no false override)")
+            let knownChange = NightShiftMutationPlanner.plan(
+                desired: true, live: false, lastApplied: false)
+            t.check(knownChange.mutation == true && knownChange.isKnownChange,
+                    "live Night Shift drift requests a proven mutation")
+            t.check(NightShiftMutationPlanner.plan(
+                desired: true, live: true, lastApplied: false
+            ).mutation == nil, "live matching state is idempotent despite a stale cache")
+            let failedAttempt = NightShiftMutationPlanner.plan(
+                desired: true, live: false, lastApplied: false)
+            let retry = NightShiftMutationPlanner.plan(
+                desired: true, live: false, lastApplied: false)
+            t.check(failedAttempt == retry && retry.mutation == true,
+                    "failed Night Shift mutation retries when state remains unchanged")
+            let unknown = NightShiftMutationPlanner.plan(
+                desired: true, live: nil, lastApplied: nil)
+            t.check(unknown.mutation == true && !unknown.isKnownChange,
+                    "unknown launch state reconciles without claiming a known change")
+            t.check(NightShiftMutationPlanner.plan(
+                desired: nil, live: false, lastApplied: true
+            ).mutation == nil, "unselected or unavailable Night Shift is never mutated")
+            t.check(!NightShiftOwnershipPolicy.ownershipAfterSuccessfulMutation(
+                previous: false, mutation: true, isKnownChange: false
+            ), "unknown/redundant enable does not claim user-owned Night Shift")
+            let owned = NightShiftOwnershipPolicy.ownershipAfterSuccessfulMutation(
+                previous: false, mutation: true, isKnownChange: true
+            )
+            t.check(owned && NightShiftOwnershipPolicy.needsCleanupWhenDisabled(
+                ownedActive: owned
+            ), "proven scheduler enable requires cleanup on opt-out")
+            t.check(!NightShiftOwnershipPolicy.ownershipAfterSuccessfulMutation(
+                previous: true, mutation: false, isKnownChange: true
+            ), "successful deactivation releases scheduler ownership")
         }
 
         // --- Transition fire-delay (arming the on-time boundary timer) ---
@@ -440,13 +452,18 @@ struct SunCalculatorTestMain {
             // No upcoming transition → nil (nothing to schedule).
             t.check(Scheduler.fireDelay(until: nil, now: now) == nil, "nil transition → no timer")
             // Future transition → (date − now) + 1s cushion.
-            let future = Transition(date: at(2024, 1, 10, 20, 0), mode: .dark)
+            let future = Transition(date: at(2024, 1, 10, 20, 0), phase: .night)
             if let delay = Scheduler.fireDelay(until: future, now: now) {
                 t.check(abs(delay - (8 * 3600 + 1)) < 0.001, "future transition → fires at boundary +1s")
             } else { t.check(false, "future transition should yield a delay") }
             // Past/already-due transition → nil (caller enforces immediately).
-            let past = Transition(date: at(2024, 1, 10, 11, 0), mode: .light)
+            let past = Transition(date: at(2024, 1, 10, 11, 0), phase: .day)
             t.check(Scheduler.fireDelay(until: past, now: now) == nil, "past transition → no timer")
+            let pauseExpiry = at(2024, 1, 10, 13, 0)
+            let nextBoundary = at(2024, 1, 10, 20, 0)
+            t.check(Scheduler.fireDelay(
+                untilNextOf: [nextBoundary, pauseExpiry], now: now
+            ) == 3601, "one-hour pause expiry arms before the next phase boundary")
         }
 
         // --- Override migration: the Reason decoder tolerates unknown cases ---
@@ -474,6 +491,45 @@ struct SunCalculatorTestMain {
             if let back = try? dec.decode(Override.self, from: legacy) {
                 t.check(back.reason == .pausedUntilBoundary, "legacy pausedUntilBoundary still decodes correctly")
             } else { t.check(false, "legacy reason should decode") }
+        }
+
+        // --- Scheduled-effect defaults and migration from 2.7 ---
+        do {
+            print("Scheduled effect settings migration:")
+            let suite = "DarkModeSchedulerTests.\(UUID().uuidString)"
+            if let defaults = UserDefaults(suiteName: suite) {
+                defer { defaults.removePersistentDomain(forName: suite) }
+                defaults.removePersistentDomain(forName: suite)
+                let store = SettingsStore(defaults: defaults)
+
+                t.check(store.darkAppearanceEnabled,
+                        "fresh install defaults Dark appearance on")
+                t.check(!store.nightShiftEnabled,
+                        "fresh install defaults Night Shift off")
+
+                defaults.set(true, forKey: "nightShiftEnabled")
+                defaults.set(21 * 60, forKey: "fixedDarkMinutes")
+                defaults.set(-30, forKey: "darkOffsetMinutes")
+                t.check(store.scheduleEffects == ScheduleEffects(
+                    darkAppearance: true, nightShift: true
+                ), "existing Night Shift preference migrates with Dark appearance enabled")
+                t.check(store.fixedNighttimeMinutes == 21 * 60
+                        && store.nighttimeOffsetMinutes == -30,
+                        "legacy nighttime boundary and offset keys remain compatible")
+
+                store.darkAppearanceEnabled = false
+                t.check(!store.darkAppearanceEnabled && store.nightShiftEnabled,
+                        "Dark appearance selection persists independently")
+
+                store.nightShiftOwnedActive = true
+                store.nightShiftCleanupPending = true
+                let relaunched = SettingsStore(defaults: defaults)
+                t.check(relaunched.nightShiftOwnedActive
+                        && relaunched.nightShiftCleanupPending,
+                        "Night Shift ownership and failed cleanup persist across relaunch")
+            } else {
+                t.check(false, "created isolated UserDefaults suite")
+            }
         }
 
         t.finish()

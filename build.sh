@@ -12,8 +12,8 @@ cd "$(dirname "$0")"
 APP_NAME="DarkModeScheduler"
 DISPLAY_NAME="Dark Mode Scheduler"
 BUNDLE_ID="com.kyle.darkmodescheduler"
-VERSION="2.7"
-BUILD_NUMBER="9"
+VERSION="2.8"
+BUILD_NUMBER="10"
 MIN_MACOS="13.0"
 
 BUILD_DIR=".build"
@@ -103,7 +103,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Dark Mode Scheduler controls System Events to switch the system appearance between Light and Dark on schedule.</string>
+    <string>Dark Mode Scheduler controls System Events only when you choose to switch the system appearance between Light and Dark on schedule.</string>
     <key>NSLocationUsageDescription</key>
     <string>Dark Mode Scheduler can use your location to compute local sunrise and sunset times. This is optional — a postal code works without it.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

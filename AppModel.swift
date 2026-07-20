@@ -18,6 +18,21 @@ import ServiceManagement
 @MainActor
 final class AppModel: ObservableObject {
 
+    private enum NightShiftSyncResult: Equatable {
+        case noChange
+        case changed
+        case reconciledUnknown
+        case failed
+        case unverified
+
+        var completesPendingCleanup: Bool {
+            switch self {
+            case .noChange, .changed, .reconciledUnknown: return true
+            case .failed, .unverified: return false
+            }
+        }
+    }
+
     // MARK: Location / geocoding state
     @Published private(set) var location: ResolvedLocation?
     @Published var zipInput: String = ""
@@ -33,17 +48,17 @@ final class AppModel: ObservableObject {
     // MARK: Sun / schedule display
     @Published private(set) var sunrise: SunEvent = .alwaysDown
     @Published private(set) var sunset: SunEvent = .alwaysDown
-    @Published private(set) var scheduledMode: AppearanceMode = .light
+    @Published private(set) var scheduledPhase: SchedulePhase = .day
     @Published private(set) var currentMode: AppearanceMode = .light
     @Published private(set) var nextTransition: Transition?
     @Published private(set) var permissionBlocked = false
 
     // MARK: Mode + tuning
     @Published var scheduleMode: ScheduleMode = .sun
-    @Published var fixedDarkMinutes: Int = 20 * 60
-    @Published var fixedLightMinutes: Int = 7 * 60
-    @Published var darkOffsetMinutes: Int = 0
-    @Published var lightOffsetMinutes: Int = 0
+    @Published var fixedNighttimeMinutes: Int = 20 * 60
+    @Published var fixedDaytimeMinutes: Int = 7 * 60
+    @Published var nighttimeOffsetMinutes: Int = 0
+    @Published var daytimeOffsetMinutes: Int = 0
 
     // MARK: Overrides / pause
     @Published private(set) var override: Override?
@@ -53,8 +68,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Feature toggles
     @Published var notificationsEnabled = false
+    @Published var darkAppearanceEnabled = true
     @Published var nightShiftEnabled = false
     @Published private(set) var nightShiftAvailable = false
+    @Published private(set) var nightShiftError: String?
 
     // MARK: Launch at login
     @Published private(set) var launchAtLogin = false
@@ -64,8 +81,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var glanceText = "Dark Mode Scheduler"
 
     // Derived helpers used by the UI.
-    var scheduledDark: Bool { scheduledMode.isDark }
-    var scheduleMatches: Bool { currentMode == scheduledMode }
+    var scheduledNight: Bool { displayedPhase.isNight }
+    var scheduleMatches: Bool {
+        let appearanceMatches = !darkAppearanceEnabled || currentMode == scheduledPhase.appearance
+        let nightShiftMatches = !nightShiftEnabled || !nightShiftAvailable
+            || lastNightShiftActive == scheduledPhase.isNight
+        return appearanceMatches && nightShiftMatches
+    }
+    var hasAvailableEffects: Bool {
+        darkAppearanceEnabled || (nightShiftEnabled && nightShiftAvailable)
+    }
+    var selectedEffects: ScheduleEffects {
+        ScheduleEffects(darkAppearance: darkAppearanceEnabled, nightShift: nightShiftEnabled)
+    }
     var isOverridden: Bool { override != nil }
     /// True while a "Switch early" override is holding the brought-forward mode.
     var isEarlySwitch: Bool { override?.reason == .earlySwitch }
@@ -88,21 +116,30 @@ final class AppModel: ObservableObject {
 
     /// The mode the app believes it last put in effect (or accepted). Seeds the
     /// manual-divergence detection so the first tick never false-triggers.
-    private var lastEnforced: AppearanceMode = .light
+    private var lastAppearanceBaseline: AppearanceMode = .light
     /// Dedup for Night Shift calls.
     private var lastNightShiftActive: Bool?
+    private var nightShiftOwnedActive = false
+    private var pendingNightShiftDeactivation = false
 
     init() {
         // Load persisted settings into published mirrors.
         location = settings.location
         scheduleMode = settings.scheduleMode
-        fixedDarkMinutes = settings.fixedDarkMinutes
-        fixedLightMinutes = settings.fixedLightMinutes
-        darkOffsetMinutes = settings.darkOffsetMinutes
-        lightOffsetMinutes = settings.lightOffsetMinutes
+        fixedNighttimeMinutes = settings.fixedNighttimeMinutes
+        fixedDaytimeMinutes = settings.fixedDaytimeMinutes
+        nighttimeOffsetMinutes = settings.nighttimeOffsetMinutes
+        daytimeOffsetMinutes = settings.daytimeOffsetMinutes
         locationSource = settings.locationSource
         notificationsEnabled = settings.notificationsEnabled
+        darkAppearanceEnabled = settings.darkAppearanceEnabled
         nightShiftEnabled = settings.nightShiftEnabled
+        nightShiftOwnedActive = settings.nightShiftOwnedActive
+        pendingNightShiftDeactivation = settings.nightShiftCleanupPending
+        if nightShiftEnabled, pendingNightShiftDeactivation {
+            pendingNightShiftDeactivation = false
+            settings.nightShiftCleanupPending = false
+        }
         override = settings.override
         // A "Test switch" preview is momentary — never let it survive a relaunch.
         // (Manual/pause overrides still persist across launches, as before.)
@@ -116,7 +153,7 @@ final class AppModel: ObservableObject {
         countryInput = location?.country ?? "US"
 
         // Seed the divergence baseline to the live appearance.
-        lastEnforced = appearance.currentMode()
+        lastAppearanceBaseline = appearance.currentMode()
         locationAuthStatus = locationService.authorizationStatus
 
         wireLocationService()
@@ -151,7 +188,7 @@ final class AppModel: ObservableObject {
             self.location = resolved
             self.countryInput = resolved.country
             self.locationError = nil
-            self.tick()
+            self.scheduleInputsDidChange()
         }
         locationService.onError = { [weak self] message in
             self?.locationError = message
@@ -191,13 +228,15 @@ final class AppModel: ObservableObject {
     /// switch lands on time instead of waiting for the next 60s poll. Re-armed on
     /// every tick (and thus on launch, wake, and settings changes); the periodic
     /// timer remains the safety net for drift, sleep/wake, and clock changes.
-    private func scheduleTransitionTimer(for next: Transition?, now: Date) {
+    private func scheduleEventTimer(for next: Transition?, override: Override?, now: Date) {
         transitionTimer?.invalidate()
         transitionTimer = nil
-        guard let delay = Scheduler.fireDelay(until: next, now: now) else { return }
+        let dates = [next?.date, override?.isActive(at: now) == true ? override?.until : nil]
+            .compactMap { $0 }
+        guard let delay = Scheduler.fireDelay(untilNextOf: dates, now: now) else { return }
         let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                Log.scheduler.info("Transition boundary reached; re-evaluating")
+                Log.scheduler.info("Scheduled boundary or pause expiry reached; re-evaluating")
                 self?.tick()
             }
         }
@@ -212,6 +251,7 @@ final class AppModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 Log.scheduler.info("System woke; re-evaluating schedule")
+                self?.lastNightShiftActive = nil
                 self?.tick()
             }
         }
@@ -227,6 +267,8 @@ final class AppModel: ObservableObject {
             let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
                     Log.scheduler.info("System clock/time zone changed; re-evaluating schedule")
+                    self?.retargetBoundaryOverride(now: Date(), cancelEarlySwitch: false)
+                    self?.lastNightShiftActive = nil
                     self?.tick()
                 }
             }
@@ -244,20 +286,46 @@ final class AppModel: ObservableObject {
             guard let location else { return nil }
             return Scheduler(config: .sun(latitude: location.latitude,
                                           longitude: location.longitude,
-                                          darkOffsetMinutes: darkOffsetMinutes,
-                                          lightOffsetMinutes: lightOffsetMinutes),
+                                          nighttimeOffsetMinutes: nighttimeOffsetMinutes,
+                                          daytimeOffsetMinutes: daytimeOffsetMinutes),
                              timeZone: timeZone)
         case .fixed:
-            return Scheduler(config: .fixed(darkMinutes: fixedDarkMinutes,
-                                            lightMinutes: fixedLightMinutes),
+            return Scheduler(config: .fixed(nighttimeMinutes: fixedNighttimeMinutes,
+                                            daytimeMinutes: fixedDaytimeMinutes),
                              timeZone: timeZone)
         }
     }
 
+    /// Retarget boundary-relative overrides after a schedule or time-zone edit.
+    /// One-hour pauses retain their duration. Schedule edits cancel an early
+    /// switch because its brought-forward phase may no longer be the next one.
+    private func retargetBoundaryOverride(now: Date, cancelEarlySwitch: Bool) {
+        guard let current = override, current.isActive(at: now) else { return }
+        if current.reason == .earlySwitch, cancelEarlySwitch {
+            override = nil
+            settings.override = nil
+            return
+        }
+        guard current.reason == .manual
+                || current.reason == .pausedUntilBoundary
+                || current.reason == .earlySwitch,
+              let boundary = buildScheduler()?.nextTransition(after: now)?.date
+        else { return }
+        let retargeted = Override(reason: current.reason, until: boundary)
+        override = retargeted
+        settings.override = retargeted
+    }
+
+    private func scheduleInputsDidChange(now: Date = Date()) {
+        retargetBoundaryOverride(now: now, cancelEarlySwitch: true)
+        lastNightShiftActive = nil
+        tick(now: now)
+    }
+
     // MARK: - The evaluation tick
 
-    /// Recompute desired appearance from the current time & settings, run it
-    /// through the pure state machine, and apply the result.
+    /// Recompute the day/night phase, then independently reconcile each selected
+    /// effect through the pure state machine.
     func tick(now: Date = Date()) {
         currentMode = appearance.currentMode()
         updateSunDisplay(now: now)
@@ -269,23 +337,32 @@ final class AppModel: ObservableObject {
                 override = nil
                 settings.override = nil
             }
-            scheduledMode = currentMode
+            scheduledPhase = .day
             nextTransition = nil
-            scheduleTransitionTimer(for: nil, now: now)
+            scheduleEventTimer(for: nil, override: override, now: now)
+            if pendingNightShiftDeactivation {
+                let result = syncNightShift(desired: false)
+                if result.completesPendingCleanup {
+                    pendingNightShiftDeactivation = false
+                    settings.nightShiftCleanupPending = false
+                }
+            }
             updateGlance()
             return
         }
 
-        scheduledMode = scheduler.desiredMode(at: now)
+        scheduledPhase = scheduler.desiredPhase(at: now)
         let next = scheduler.nextTransition(after: now)
         nextTransition = next
-        scheduleTransitionTimer(for: next, now: now)
+        scheduleEventTimer(for: next, override: override, now: now)
         let boundary = next?.date ?? now.addingTimeInterval(12 * 3600)
 
         let decision = EnforcementEngine.decide(now: now,
-                                                currentMode: currentMode,
-                                                scheduledMode: scheduledMode,
-                                                lastEnforced: lastEnforced,
+                                                phase: scheduledPhase,
+                                                effects: selectedEffects,
+                                                nightShiftAvailable: nightShiftAvailable,
+                                                currentAppearance: currentMode,
+                                                lastAppearanceBaseline: lastAppearanceBaseline,
                                                 override: override,
                                                 nextBoundary: boundary)
 
@@ -297,37 +374,48 @@ final class AppModel: ObservableObject {
                 Log.scheduler.info("Manual divergence detected → override until \(ov.until, privacy: .public)")
             }
         }
-        if let mode = decision.enforce {
+        var mutatedEffects = ScheduleEffects(darkAppearance: false, nightShift: false)
+        if let mode = decision.appearance {
             let outcome = appearance.enforce(desired: mode)
             switch outcome {
             case .applied(let applied):
                 permissionBlocked = false
-                lastEnforced = applied
-                if notificationsEnabled { notifications.postSwitch(to: applied) }
+                lastAppearanceBaseline = applied
+                mutatedEffects.darkAppearance = true
             case .unchanged(let unchangedMode):
                 permissionBlocked = false
-                lastEnforced = unchangedMode
+                lastAppearanceBaseline = unchangedMode
             case .failedPermission:
-                // We did NOT change the appearance. Keep `lastEnforced` equal to
+                // We did NOT change the appearance. Keep the baseline equal to
                 // the live appearance so the next tick retries instead of
                 // mistaking the unchanged appearance for a manual override.
                 permissionBlocked = true
-                lastEnforced = appearance.currentMode()
+                lastAppearanceBaseline = appearance.currentMode()
             case .failed:
                 permissionBlocked = false
-                lastEnforced = appearance.currentMode()
+                lastAppearanceBaseline = appearance.currentMode()
             }
         } else {
-            // Suspended (paused) or a detected manual divergence: accept the
-            // user's current appearance as the new baseline.
-            lastEnforced = decision.lastEnforced
+            // No appearance instruction: suspended, manually overridden, or
+            // Dark appearance is not selected. Never prompt for Automation.
+            permissionBlocked = false
+            lastAppearanceBaseline = decision.lastAppearanceBaseline
         }
 
+        let isNightShiftCleanup = pendingNightShiftDeactivation
+        let desiredNightShift = isNightShiftCleanup ? false : decision.nightShift
+        let nightShiftResult = syncNightShift(desired: desiredNightShift)
+        if nightShiftResult == .changed, !isNightShiftCleanup {
+            mutatedEffects.nightShift = true
+        }
+        if isNightShiftCleanup,
+           nightShiftResult.completesPendingCleanup {
+            pendingNightShiftDeactivation = false
+            settings.nightShiftCleanupPending = false
+        }
         currentMode = appearance.currentMode()
-        // Keep Night Shift tied to the appearance actually in effect (so a failed
-        // or permission-blocked switch never leaves the display warm in Light).
-        if decision.enforce != nil {
-            syncNightShift(active: currentMode.isDark)
+        if !mutatedEffects.isEmpty, notificationsEnabled {
+            notifications.postTransition(to: scheduledPhase, effects: mutatedEffects)
         }
         updateGlance()
     }
@@ -346,12 +434,36 @@ final class AppModel: ObservableObject {
         sunset = times.sunset
     }
 
-    private func syncNightShift(active: Bool) {
-        guard nightShiftEnabled, nightShift.isAvailable else { return }
-        if lastNightShiftActive == active { return }
-        if nightShift.setActive(active) {
-            lastNightShiftActive = active
+    @discardableResult
+    private func syncNightShift(desired: Bool?) -> NightShiftSyncResult {
+        guard desired != nil else { return .noChange }
+        guard nightShift.isAvailable else { return .unverified }
+        let live = nightShift.activeState
+        if let live { lastNightShiftActive = live }
+        let plan = NightShiftMutationPlanner.plan(
+            desired: desired, live: live, lastApplied: lastNightShiftActive
+        )
+        guard let mutation = plan.mutation else {
+            if desired == false {
+                nightShiftOwnedActive = false
+                settings.nightShiftOwnedActive = false
+            }
+            nightShiftError = nil
+            return .noChange
         }
+        guard nightShift.setActive(mutation) else {
+            nightShiftError = "Night Shift couldn't be changed. The app will retry."
+            return .failed
+        }
+        lastNightShiftActive = mutation
+        nightShiftOwnedActive = NightShiftOwnershipPolicy.ownershipAfterSuccessfulMutation(
+            previous: nightShiftOwnedActive,
+            mutation: mutation,
+            isKnownChange: plan.isKnownChange
+        )
+        settings.nightShiftOwnedActive = nightShiftOwnedActive
+        nightShiftError = nil
+        return plan.isKnownChange ? .changed : .reconciledUnknown
     }
 
     // MARK: - Glance (menu-bar readout)
@@ -365,7 +477,7 @@ final class AppModel: ObservableObject {
         if let override, override.isActive(at: Date()) {
             switch override.reason {
             case .earlySwitch:
-                return "\(currentMode.label) early — rejoins \(shortDateTime(override.until))"
+                return "\(displayedPhase.label) early — rejoins \(shortDateTime(override.until))"
             case .preview:
                 return "Previewing \(currentMode.label) — Back to schedule"
             default:
@@ -373,7 +485,7 @@ final class AppModel: ObservableObject {
             }
         }
         if let next = nextTransition {
-            return "Next: \(next.mode.label) at \(shortDateTime(next.date))"
+            return "Next: \(next.phase.label.lowercased()) at \(shortDateTime(next.date))"
         }
         return "Dark Mode Scheduler"
     }
@@ -387,21 +499,24 @@ final class AppModel: ObservableObject {
         case .pausedDuration:      return "Paused — resumes \(resumes)"
         case .pausedUntilBoundary: return "Paused until next transition — resumes \(resumes)"
         case .preview:             return "Previewing \(currentMode.label) (test switch)"
-        case .earlySwitch:         return "\(currentMode.label) early — rejoins schedule \(resumes)"
+        case .earlySwitch:         return "\(displayedPhase.label) early — rejoins schedule \(resumes)"
         }
     }
 
-    /// The mode "Switch early" would move to: the next scheduled transition's
-    /// mode, or (when there's no schedule yet) simply the opposite of what's live.
-    var earlySwitchTarget: AppearanceMode {
-        nextTransition?.mode ?? (currentMode == .dark ? .light : .dark)
+    var displayedPhase: SchedulePhase {
+        isEarlySwitch ? earlySwitchTarget : scheduledPhase
+    }
+
+    /// The phase "Switch early" would bring forward.
+    var earlySwitchTarget: SchedulePhase {
+        nextTransition?.phase ?? (scheduledPhase == .night ? .day : .night)
     }
 
     // MARK: - Switch early (bring the next scheduled change forward)
 
-    /// Switch to the upcoming scheduled mode *now* instead of waiting for the
-    /// boundary. Applies it immediately (also confirming Automation works) and
-    /// registers an `.earlySwitch` override until that boundary, so the scheduler
+    /// Bring the upcoming phase's selected effects forward to now. Appearance
+    /// Automation is used only when Dark appearance is selected. This registers
+    /// an `.earlySwitch` override until that boundary, so the scheduler
     /// SUSPENDS and won't snap back; when the boundary arrives the schedule would
     /// have switched to this mode anyway, so it rejoins seamlessly. "Back to
     /// schedule" (`resumeNow`) undoes it early. No notification — that's for real
@@ -413,22 +528,67 @@ final class AppModel: ObservableObject {
         // Hold until the schedule catches up (the next boundary); fall back to a
         // 12h window if there's no upcoming transition (e.g. sun mode w/o location).
         let boundary = nextTransition?.date ?? now.addingTimeInterval(12 * 3600)
-        let outcome = appearance.apply(desired: target)
-        switch outcome {
-        case .applied(let applied), .unchanged(let applied):
+        guard hasAvailableEffects else {
+            earlySwitchError = "Select an available nighttime effect first."
+            updateGlance()
+            return
+        }
+
+        var failed = false
+        if darkAppearanceEnabled {
+            switch appearance.enforce(desired: target.appearance) {
+            case .applied(let applied), .unchanged(let applied):
+                permissionBlocked = false
+                lastAppearanceBaseline = applied
+            case .failedPermission:
+                permissionBlocked = true
+                failed = true
+            case .failed(let code):
+                permissionBlocked = false
+                earlySwitchError = "Couldn't switch Dark appearance (error \(code)). Try again."
+                failed = true
+            }
+        } else {
             permissionBlocked = false
-            lastEnforced = applied
+            lastAppearanceBaseline = currentMode
+        }
+        if nightShiftEnabled, nightShiftAvailable {
+            let live = nightShift.activeState
+            if let live { lastNightShiftActive = live }
+            let plan = NightShiftMutationPlanner.plan(
+                desired: target.isNight, live: live,
+                lastApplied: lastNightShiftActive
+            )
+            if plan.mutation == nil, !target.isNight {
+                nightShiftOwnedActive = false
+                settings.nightShiftOwnedActive = false
+            }
+            if let mutation = plan.mutation {
+                if nightShift.setActive(mutation) {
+                    lastNightShiftActive = mutation
+                    nightShiftOwnedActive = NightShiftOwnershipPolicy.ownershipAfterSuccessfulMutation(
+                        previous: nightShiftOwnedActive,
+                        mutation: mutation,
+                        isKnownChange: plan.isKnownChange
+                    )
+                    settings.nightShiftOwnedActive = nightShiftOwnedActive
+                    nightShiftError = nil
+                } else {
+                    earlySwitchError = "Night Shift couldn't be changed. Try again."
+                    nightShiftError = "Night Shift couldn't be changed. The app will retry."
+                    failed = true
+                }
+            }
+        }
+
+        if !failed {
             let ov = Override(reason: .earlySwitch, until: boundary)
             override = ov
             settings.override = ov
-            syncNightShift(active: applied.isDark)
-        case .failedPermission:
-            // Do NOT register an override; nothing changed. Reuse the existing
-            // Automation-permission hint via `permissionBlocked`.
-            permissionBlocked = true
-        case .failed(let code):
-            permissionBlocked = false
-            earlySwitchError = "Couldn't switch the appearance (error \(code)). Try again."
+        } else {
+            // Reconcile immediately so a partially applied early switch does not
+            // linger outside the schedule.
+            tick(now: now)
         }
         currentMode = appearance.currentMode()
         updateGlance()
@@ -456,6 +616,7 @@ final class AppModel: ObservableObject {
         earlySwitchError = nil
         override = newValue
         settings.override = newValue
+        if newValue == nil { lastNightShiftActive = nil }
         tick()
     }
 
@@ -464,31 +625,31 @@ final class AppModel: ObservableObject {
     func setScheduleMode(_ mode: ScheduleMode) {
         scheduleMode = mode
         settings.scheduleMode = mode
-        tick()
+        scheduleInputsDidChange()
     }
 
-    func setFixedDarkMinutes(_ minutes: Int) {
-        settings.fixedDarkMinutes = minutes
-        fixedDarkMinutes = settings.fixedDarkMinutes
-        tick()
+    func setFixedNighttimeMinutes(_ minutes: Int) {
+        settings.fixedNighttimeMinutes = minutes
+        fixedNighttimeMinutes = settings.fixedNighttimeMinutes
+        scheduleInputsDidChange()
     }
 
-    func setFixedLightMinutes(_ minutes: Int) {
-        settings.fixedLightMinutes = minutes
-        fixedLightMinutes = settings.fixedLightMinutes
-        tick()
+    func setFixedDaytimeMinutes(_ minutes: Int) {
+        settings.fixedDaytimeMinutes = minutes
+        fixedDaytimeMinutes = settings.fixedDaytimeMinutes
+        scheduleInputsDidChange()
     }
 
-    func setDarkOffset(_ minutes: Int) {
-        settings.darkOffsetMinutes = minutes
-        darkOffsetMinutes = settings.darkOffsetMinutes
-        tick()
+    func setNighttimeOffset(_ minutes: Int) {
+        settings.nighttimeOffsetMinutes = minutes
+        nighttimeOffsetMinutes = settings.nighttimeOffsetMinutes
+        scheduleInputsDidChange()
     }
 
-    func setLightOffset(_ minutes: Int) {
-        settings.lightOffsetMinutes = minutes
-        lightOffsetMinutes = settings.lightOffsetMinutes
-        tick()
+    func setDaytimeOffset(_ minutes: Int) {
+        settings.daytimeOffsetMinutes = minutes
+        daytimeOffsetMinutes = settings.daytimeOffsetMinutes
+        scheduleInputsDidChange()
     }
 
     // MARK: - Location: postal code (features 5) & CoreLocation (feature 4)
@@ -519,7 +680,7 @@ final class AppModel: ObservableObject {
                 settings.locationSource = .zip
                 locationSource = .zip
                 geocodeError = nil
-                tick()
+                scheduleInputsDidChange()
             } catch let error as GeocodeError {
                 geocodeError = error.errorDescription
             } catch {
@@ -566,21 +727,44 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - Night Shift (feature 8)
+    // MARK: - Scheduled effects
+
+    func setDarkAppearanceEnabled(_ enabled: Bool) {
+        darkAppearanceEnabled = enabled
+        settings.darkAppearanceEnabled = enabled
+        // Changing selection is an explicit user action, not a manual
+        // divergence. Disabling leaves the current appearance exactly as-is.
+        lastAppearanceBaseline = appearance.currentMode()
+        if !enabled {
+            permissionBlocked = false
+            if override?.reason == .manual {
+                override = nil
+                settings.override = nil
+            }
+        }
+        tick()
+    }
 
     func setNightShiftEnabled(_ enabled: Bool) {
         nightShiftEnabled = enabled
         settings.nightShiftEnabled = enabled
         if enabled {
+            pendingNightShiftDeactivation = false
+            settings.nightShiftCleanupPending = false
+            nightShiftError = nil
             lastNightShiftActive = nil
-            syncNightShift(active: currentMode.isDark)
+            tick()
         } else {
             // Only undo warmth WE turned on; never disable a Night Shift the
             // user configured themselves (their own schedule) but we never touched.
-            if nightShift.isAvailable, lastNightShiftActive == true {
-                nightShift.setActive(false)
+            pendingNightShiftDeactivation = NightShiftOwnershipPolicy
+                .needsCleanupWhenDisabled(ownedActive: nightShiftOwnedActive)
+            settings.nightShiftCleanupPending = pendingNightShiftDeactivation
+            if !pendingNightShiftDeactivation {
+                lastNightShiftActive = nil
+                nightShiftError = nil
             }
-            lastNightShiftActive = nil
+            tick()
         }
     }
 
