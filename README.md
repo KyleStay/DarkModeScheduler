@@ -1,11 +1,9 @@
 # Dark Mode Scheduler
 
-A native macOS **menu bar app** that automatically switches the system
-appearance to **Dark at night** and **Light during the day** — on a **sun-based**
-schedule (computed locally from your location) or at **fixed times** you choose.
-It's the manual alternative to macOS's built-in Location-Services "Auto"
-appearance: useful if you keep Location Services off, want explicit times, or
-want per-transition tuning.
+A native macOS **menu bar app** that runs your chosen nighttime effects on a
+**sun-based** schedule (computed locally from your location) or at **fixed
+times**. Dark appearance and Night Shift are independent: use either one, both,
+or neither without surrendering your current appearance choice.
 
 - **Sun times are computed locally** using the NOAA sunrise/sunset algorithm
   (`SunCalculator.swift`). No network is used for sun math.
@@ -21,15 +19,15 @@ want per-transition tuning.
 
 | # | Feature | Summary |
 |---|---------|---------|
-| 1 | **Manual override / pause** | Pause for 1 hour, pause until the next sunrise/sunset, or resume now. If you flip the appearance yourself (e.g. Control Center), the app detects it and honors your choice until the next scheduled boundary instead of snapping back. Override state is shown in the popover and persists across relaunch. |
-| 2 | **Fixed-schedule mode** | Toggle between *Sun-based* and *Fixed times* (pick explicit Dark-at / Light-at clock times). All scheduling, wake, and idempotency logic works identically in both modes. |
-| 3 | **Sun-time offsets** | In sun mode, shift each transition (e.g. "Dark 30 min before sunset", "Light 15 min after sunrise"), ±180 min, applied on top of the NOAA math. |
+| 1 | **Manual override / pause** | Pause every scheduled effect for 1 hour or until the next boundary, then reconcile on resume. When Dark appearance is selected, manual appearance changes are honored until the next boundary. |
+| 2 | **Fixed-schedule mode** | Toggle between *Sun-based* and *Fixed times* (pick explicit nighttime/daytime boundaries). All effects share the same phase, wake, and timer logic. |
+| 3 | **Sun-time offsets** | Shift the nighttime and daytime boundaries relative to sunset and sunrise by ±180 minutes. |
 | 4 | **Optional auto-location** | A "My Location" source uses CoreLocation as an alternative to a manual postal code, with clear inline UI for every authorization state. Postal code stays the default and the fallback; Location Services is entirely optional. |
 | 5 | **Non-US locations** | Enter a country code + postal code (e.g. `GB SW1`, `DE 10115`). US 5-digit zips remain the default happy path. Differing response shapes and not-found/offline cases are handled gracefully. |
-| 6 | **Switch notifications** (opt-in, default off) | Optionally posts a "Switched to Dark/Light" notification on an actual switch. Authorization is requested only when you enable it, and redundant (idempotent) no-op ticks never notify. |
-| 7 | **Menu-bar glance** | The menu-bar item's tooltip and accessibility label surface the next transition (mode + time) — or the current pause state — without opening the popover. |
-| 8 | **Night Shift coordination** (opt-in, default off) | Ties warm color temperature to the same schedule (warm at night, off during day). See the caveat below. |
-| 9 | **Switch early** | Bring the next scheduled change forward — switch to the upcoming mode *now* instead of waiting for sunset/sunrise (which also confirms switching and Automation permission work). It holds that mode until the schedule would have switched anyway, then rejoins the schedule automatically; **Back to schedule** undoes it sooner. No switch notification is posted for an early switch. |
+| 6 | **Transition notifications** (opt-in, default off) | Posts only when a selected effect actually changes; repeated ticks never notify. |
+| 7 | **Menu-bar glance** | Surfaces the current phase and next nighttime/daytime boundary, or the pause state. |
+| 8 | **Nighttime effects** | Independent **Dark appearance** (default on) and **Night Shift** (default off) controls live directly below the schedule picker. |
+| 9 | **Switch early** | Bring the next phase's selected effects forward, hold them until the boundary, then rejoin automatically. Night Shift-only use never requests Appearance Automation permission. |
 
 ---
 
@@ -78,9 +76,9 @@ The app requests only what a feature needs, and only when that feature is used.
 
 | Permission | When | Required for |
 |------------|------|--------------|
-| **Automation** (System Events) | First appearance switch | Live-switching Dark/Light (core). Until granted, the popover shows an inline hint and logs `-1743` instead of crashing. |
+| **Automation** (System Events) | First scheduled appearance switch, only when **Dark appearance** is enabled | Live-switching Dark/Light. Night Shift-only schedules never request it. |
 | **Location Services** | Only if you pick "My Location" | Feature 4. Fully optional — postal code works without it. |
-| **Notifications** | Only if you enable "Notify on switch" | Feature 6. |
+| **Notifications** | Only if you enable "Notify on transition" | Feature 6. |
 
 ### First run — Automation permission (important)
 
@@ -107,7 +105,7 @@ Open the popover, keep the source on **Postal code**, enter a country code
 geocodes it once, caches `{code, country, lat, lon, city, state}`, shows the
 resolved place, and (in sun mode) today's sunrise/sunset. Invalid input,
 not-found, and offline errors are shown inline. Changing the location
-immediately re-evaluates and enforces the correct appearance.
+immediately re-evaluates the current schedule phase and selected effects.
 
 ### Location (My Location — optional)
 
@@ -117,31 +115,32 @@ Settings / granted → refresh). If you deny it, postal code remains available.
 
 ### Schedule mode & tuning
 
-- **Sun-based:** optionally offset each transition (Dark relative to sunset,
-  Light relative to sunrise), ±180 minutes in 5-minute steps.
-- **Fixed times:** pick a Dark-at and a Light-at clock time.
+- Choose **Sun-based** or **Fixed times**, then select independent **Nighttime
+  effects** immediately below the picker.
+- **Dark appearance** defaults on and switches Dark at night / Light during day.
+- **Night Shift** defaults off and can run alone. If its guarded private API is
+  unavailable, only that control is disabled and the inline explanation remains.
+- Sun mode offsets the nighttime/daytime boundaries from sunset/sunrise; fixed
+  mode uses explicit start times.
 
 ### Pause / override
 
 - **Pause 1 hour** — suspend enforcement for an hour.
 - **Pause until next sunrise/sunset** — resume at the next natural boundary.
 - **Resume schedule now** — clear any pause/override and enforce immediately.
-- **Manual flip** — if you change the appearance yourself while the app is
-  running, it treats that as an override until the next scheduled boundary
-  rather than correcting you on the next tick.
+- **Manual flip** — when Dark appearance is selected, a manual appearance change
+  pauses all scheduled effects until the next boundary. In Night Shift-only mode,
+  Light or Dark appearance is never treated as a divergence.
 
 The current override and when it ends are shown in the popover; the state
 persists across relaunch.
 
 ### Switch early
 
-Not quite time for the next change? Tap **Switch to Dark now** (or **Light** —
-the button names whichever mode is coming up next) to bring the upcoming
-scheduled switch forward. The appearance changes immediately — which also
-confirms switching works and Automation permission is granted — and holds that
-mode until the schedule would have switched anyway, then **rejoins the schedule
-automatically**. **Back to schedule** undoes it sooner. No switch notification is
-posted for an early switch. Works identically in sun and fixed modes.
+Tap **Start nighttime effects now** (or **daytime effects**) to bring the next
+phase forward. Only selected effects change; a Night Shift-only early switch
+does not touch appearance or request Automation permission. **Back to schedule**
+undoes it, and no transition notification is posted for an early switch.
 
 ### Launch at login
 
@@ -154,17 +153,15 @@ Login Items.)
 
 ## How scheduling works
 
-- The schedule (sun or fixed) is reduced to a sorted list of **transitions**
-  across a ±day window. The **desired mode** is the mode of the most recent
-  transition at/before now; the **next transition** is the first one after now.
-  Both modes share this logic, so wake handling, idempotency, and the glance are
-  identical for each.
+- The schedule is reduced to **day/night phase transitions**. The phase is
+  independent of appearance; selected effects map that phase to Dark/Light,
+  Night Shift on/off, both, or no system mutation.
 - A 60-second `Timer` re-evaluates and enforces. It also re-evaluates
   immediately **on launch**, **on any settings change**, and **on system wake**
   (`NSWorkspace.didWakeNotification`).
-- **Idempotent:** the AppleScript switch is issued **only** when the live
-  appearance differs from the desired one — no redundant calls, no flicker, and
-  notifications fire only on real switches.
+- **Idempotent:** AppleScript is issued only for a needed appearance change, and
+  Night Shift's guarded live status is compared before mutation. Failed writes
+  remain visible and retryable; app-owned warmth cleanup survives relaunch.
 
 ### The enforcement state machine
 
@@ -172,10 +169,8 @@ Every evaluation runs through one pure decision (`EnforcementEngine.decide`):
 
 1. **Expire** a due override.
 2. **Suspend** while an override is active (accept whatever appearance you've set).
-3. **Detect a manual divergence** — if the live appearance differs from both the
-   schedule *and* what the app last set, only you could have done that, so honor
-   it as an override until the next boundary.
-4. Otherwise **enforce** the scheduled mode idempotently.
+3. If Dark appearance is selected, detect and honor manual appearance divergence.
+4. Reconcile each selected and available effect independently.
 
 All three pause kinds are one representation — `Override { reason, until }` — so
 there is exactly one suspended state, not three.
@@ -194,13 +189,17 @@ there is exactly one suspended state, not three.
 - **Guards every step.** If the framework, class, or method is missing, the
   feature reports **"Unavailable on this Mac"** and the toggle is disabled — it
   never fakes success.
+- Reads `supported` and `getBlueLightStatus:` through the same isolated runtime
+  adapter, so external drift can be reconciled without redundant writes. A
+  failed status read falls back conservatively and never claims a notification
+  or ownership without evidence of a real change.
 - Only touches Night Shift when you opt in; turning the toggle off restores warm
   mode to off.
 
 **Risk:** because this relies on a private, undocumented interface, a future
 macOS release could rename or remove it. If that happens, the toggle will simply
 show as unavailable rather than misbehaving. Verified working on macOS 15; the
-warm color temperature follows the same Dark/Light schedule.
+warm color temperature follows the same day/night phase.
 
 ---
 
@@ -277,12 +276,10 @@ missing:
 `SunCalculatorTests.swift` is a self-contained assertion runner (its own `@main`,
 not an XCTest bundle). It checks computed sunrise/sunset against **U.S. Naval
 Observatory** reference values (±2 min), plus DST-awareness and polar edge cases,
-**and** the v2 scheduling core: sun-time offset math, fixed-schedule boundary
-logic (including inverted schedules), next-transition computation, override
-expiry, and the `EnforcementEngine` state machine (manual divergence, suspend,
-resume, and no-false-trigger on schedule advance). It compiles only the pure
-files (`SunCalculatorTests.swift SunCalculator.swift Scheduler.swift`) and exits
-non-zero on any failure.
+**and** the scheduling core: phase boundaries, all four effect combinations,
+migration defaults, manual divergence, pause/resume/expiry, switch-early, wake
+reconciliation, Night Shift unavailability/failure retry, and idempotency. It
+also compiles `Support.swift` to test the isolated settings migration.
 
 ### Hidden self-test (`--selftest`)
 
@@ -316,8 +313,8 @@ Darkmode scheduler/
 │                            #   NightShiftController (private CBBlueLightClient).
 ├── Support.swift            # Logging, ResolvedLocation (+v1 migration), errors,
 │                            #   SettingsStore (UserDefaults).
-├── Scheduler.swift          # PURE core: AppearanceMode, ScheduleMode, Transition,
-│                            #   Scheduler (sun+fixed), Override, EnforcementEngine.
+├── Scheduler.swift          # PURE core: SchedulePhase/Effects, transitions,
+│                            #   Scheduler, Override, EnforcementEngine.
 ├── SunCalculator.swift      # Pure NOAA sunrise/sunset math (shared with tests).
 ├── SunCalculatorTests.swift # Standalone, GUI-free unit tests (@main runner).
 ├── build.sh                 # Compile + bundle + Info.plist + codesign (ad-hoc

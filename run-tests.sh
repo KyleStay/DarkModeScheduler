@@ -15,7 +15,7 @@ echo "==> Compiling test suite (swiftc, warnings-as-info)…"
 /usr/bin/swiftc -O \
     -target "$(uname -m)-apple-macos13.0" \
     -o "$TEST_BIN" \
-    SunCalculatorTests.swift SunCalculator.swift Scheduler.swift
+    SunCalculatorTests.swift SunCalculator.swift Scheduler.swift Support.swift
 
 echo "==> Running tests…"
 echo

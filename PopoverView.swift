@@ -35,7 +35,7 @@ struct PopoverView: View {
                 }
             }
             .padding(16)
-            .frame(width: 320)
+            .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
         }
         // Size to content, but never taller than the screen it opens on — so the
         // popover only scrolls if the content genuinely can't fit the display
@@ -54,9 +54,9 @@ struct PopoverView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: model.scheduledDark ? "moon.stars.fill" : "sun.max.fill")
+            Image(systemName: model.scheduledNight ? "moon.stars.fill" : "sun.max.fill")
                 .font(.title2)
-                .foregroundStyle(model.scheduledDark ? Color.indigo : Color.orange)
+                .foregroundStyle(model.scheduledNight ? Color.indigo : Color.orange)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Dark Mode Scheduler").font(.headline)
                 Text(model.glanceSummary)
@@ -84,25 +84,23 @@ struct PopoverView: View {
                 HStack(spacing: 6) {
                     Image(systemName: model.scheduleMatches ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
                         .foregroundStyle(model.scheduleMatches ? .green : .orange)
-                    Text(model.scheduleMatches
-                         ? "Matches schedule (\(model.currentMode.label))"
-                         : "Adjusting to \(model.scheduledMode.label)…")
+                    Text(scheduleStatus)
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                HStack {
-                    Button("Pause 1 hour") { model.pauseForOneHour() }
-                        .controlSize(.small)
-                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
-                        .controlSize(.small)
+                ViewThatFits(in: .horizontal) {
+                    pauseButtons(axis: .horizontal)
+                    pauseButtons(axis: .vertical)
                 }
                 // Bring the next scheduled change forward: switch to the upcoming
                 // mode now (also confirms switching works) instead of waiting for
                 // the boundary. Holds until then, then rejoins the schedule.
                 Button { model.switchToNextModeEarly() } label: {
-                    Label("Switch to \(model.earlySwitchTarget.label) now",
-                          systemImage: model.earlySwitchTarget.isDark ? "moon.stars.fill" : "sun.max.fill")
+                    Label("Start \(model.earlySwitchTarget.label.lowercased()) effects now",
+                          systemImage: model.earlySwitchTarget.isNight ? "moon.stars.fill" : "sun.max.fill")
                 }
                 .controlSize(.small)
+                .disabled(!model.hasAvailableEffects)
+                .help("Bring the next phase's selected effects forward to now")
             }
 
             if let error = model.earlySwitchError {
@@ -112,10 +110,34 @@ struct PopoverView: View {
         }
     }
 
+    private func pauseButtons(axis: Axis) -> some View {
+        Group {
+            if axis == .horizontal {
+                HStack {
+                    Button("Pause 1 hour") { model.pauseForOneHour() }
+                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
+                }
+            } else {
+                VStack(alignment: .leading) {
+                    Button("Pause 1 hour") { model.pauseForOneHour() }
+                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
+                }
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private var scheduleStatus: String {
+        if !model.hasAvailableEffects { return "Schedule active — no available effects selected" }
+        return model.scheduleMatches
+            ? "\(model.scheduledPhase.label) effects are in place"
+            : "Adjusting \(model.scheduledPhase.label.lowercased()) effects…"
+    }
+
     /// "sunrise"/"sunset" in sun mode, "transition" in fixed mode.
     private var nextBoundaryWord: String {
         guard model.scheduleMode == .sun, let next = model.nextTransition else { return "transition" }
-        return next.mode.isDark ? "sunset" : "sunrise"
+        return next.phase.isNight ? "sunset" : "sunrise"
     }
 
     private var permissionHint: some View {
@@ -143,14 +165,16 @@ struct PopoverView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
+            nighttimeEffects
+
             if model.scheduleMode == .sun {
-                offsetRow(label: "Dark offset",
-                          minutes: model.darkOffsetMinutes,
-                          set: { model.setDarkOffset($0) },
+                offsetRow(label: "Nighttime offset",
+                          minutes: model.nighttimeOffsetMinutes,
+                          set: { model.setNighttimeOffset($0) },
                           anchor: "sunset")
-                offsetRow(label: "Light offset",
-                          minutes: model.lightOffsetMinutes,
-                          set: { model.setLightOffset($0) },
+                offsetRow(label: "Daytime offset",
+                          minutes: model.daytimeOffsetMinutes,
+                          set: { model.setDaytimeOffset($0) },
                           anchor: "sunrise")
                 // The resulting sun times sit with the offsets that shift them.
                 if model.location != nil {
@@ -158,11 +182,51 @@ struct PopoverView: View {
                     row(label: "Sunset", value: model.formatted(model.sunset))
                 }
             } else {
-                fixedTimeRow(label: "Dark at", minutes: model.fixedDarkMinutes,
-                             set: { model.setFixedDarkMinutes($0) })
-                fixedTimeRow(label: "Light at", minutes: model.fixedLightMinutes,
-                             set: { model.setFixedLightMinutes($0) })
+                fixedTimeRow(label: "Nighttime starts", minutes: model.fixedNighttimeMinutes,
+                             set: { model.setFixedNighttimeMinutes($0) })
+                fixedTimeRow(label: "Daytime starts", minutes: model.fixedDaytimeMinutes,
+                             set: { model.setFixedDaytimeMinutes($0) })
             }
+        }
+    }
+
+    private var nighttimeEffects: some View {
+        GroupBox("Nighttime effects") {
+            VStack(alignment: .leading, spacing: 5) {
+                Toggle("Dark appearance", isOn: Binding(
+                    get: { model.darkAppearanceEnabled },
+                    set: { model.setDarkAppearanceEnabled($0) }
+                ))
+                .toggleStyle(.switch)
+                .help("Switch between Dark appearance at night and Light appearance during the day")
+                .accessibilityLabel("Dark appearance")
+
+                Toggle(isOn: Binding(
+                    get: { model.nightShiftEnabled },
+                    set: { model.setNightShiftEnabled($0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Night Shift")
+                        if !model.nightShiftAvailable {
+                            Text("Unavailable on this Mac")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let error = model.nightShiftError {
+                            Text(error)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+                .toggleStyle(.switch)
+                .disabled(!model.nightShiftAvailable)
+                .help(model.nightShiftAvailable
+                      ? "Turn on Night Shift at night and off during the day"
+                      : "Night Shift control is unavailable on this Mac")
+                .accessibilityLabel("Night Shift")
+            }
+            .font(.subheadline)
         }
     }
 
@@ -208,13 +272,23 @@ struct PopoverView: View {
 
     private func fixedTimeRow(label: String, minutes: Int,
                               set: @escaping (Int) -> Void) -> some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            DatePicker("", selection: timeBinding(minutes: minutes, set: set),
-                       displayedComponents: .hourAndMinute)
-                .labelsHidden()
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                timePicker(minutes: minutes, set: set)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                timePicker(minutes: minutes, set: set)
+            }
         }
+    }
+
+    private func timePicker(minutes: Int, set: @escaping (Int) -> Void) -> some View {
+        DatePicker("", selection: timeBinding(minutes: minutes, set: set),
+                   displayedComponents: .hourAndMinute)
+            .labelsHidden()
     }
 
     private func timeBinding(minutes: Int, set: @escaping (Int) -> Void) -> Binding<Date> {
@@ -307,7 +381,7 @@ struct PopoverView: View {
         }
     }
 
-    // MARK: Preferences — launch at login, notifications (6), Night Shift (8)
+    // MARK: Preferences — launch at login and notifications
 
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -326,32 +400,25 @@ struct PopoverView: View {
             Toggle(isOn: Binding(
                 get: { model.notificationsEnabled },
                 set: { model.setNotificationsEnabled($0) })) {
-                Text("Notify on switch").font(.subheadline)
+                Text("Notify on transition").font(.subheadline)
             }
             .toggleStyle(.switch)
-
-            Toggle(isOn: Binding(
-                get: { model.nightShiftEnabled },
-                set: { model.setNightShiftEnabled($0) })) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Night Shift with schedule").font(.subheadline)
-                    if !model.nightShiftAvailable {
-                        Text("Unavailable on this Mac").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .toggleStyle(.switch)
-            .disabled(!model.nightShiftAvailable)
         }
     }
 
     // MARK: Helpers
 
     private func row(label: String, value: String) -> some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.subheadline).bold()
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Text(value).font(.subheadline).bold()
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Text(value).font(.subheadline).bold()
+            }
         }
     }
 }

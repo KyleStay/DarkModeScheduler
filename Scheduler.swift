@@ -9,10 +9,11 @@ import Foundation
 // next-transition computation without a GUI or any permissions.
 //
 // Contents:
-//   • AppearanceMode      — Light / Dark (shared by the whole app).
+//   • SchedulePhase       — Day / night, independent of system effects.
+//   • ScheduleEffects     — Which effects follow the phase.
 //   • ScheduleMode        — sun-based vs. fixed-time scheduling.
-//   • Transition          — one scheduled appearance change (date + target).
-//   • Scheduler           — unified sun/fixed schedule: desiredMode +
+//   • Transition          — one scheduled phase boundary (date + target).
+//   • Scheduler           — unified sun/fixed schedule: desiredPhase +
 //                           nextTransition, computed from a ±day window of
 //                           Transitions so both modes share identical logic.
 //   • Override            — a single representation of "enforcement suspended
@@ -31,6 +32,25 @@ enum AppearanceMode: String, Equatable, Codable {
     var label: String { self == .dark ? "Dark" : "Light" }
 }
 
+// MARK: - Schedule phase and effects
+
+enum SchedulePhase: String, Equatable, Codable {
+    case day
+    case night
+
+    var isNight: Bool { self == .night }
+    var label: String { self == .night ? "Nighttime" : "Daytime" }
+    var appearance: AppearanceMode { self == .night ? .dark : .light }
+}
+
+struct ScheduleEffects: Equatable, Codable {
+    var darkAppearance: Bool
+    var nightShift: Bool
+
+    static let defaults = ScheduleEffects(darkAppearance: true, nightShift: false)
+    var isEmpty: Bool { !darkAppearance && !nightShift }
+}
+
 // MARK: - Schedule mode
 
 enum ScheduleMode: String, Equatable, Codable {
@@ -42,16 +62,16 @@ enum ScheduleMode: String, Equatable, Codable {
 
 // MARK: - Transition
 
-/// One scheduled appearance change: at `date`, the appearance should become `mode`.
+/// One scheduled boundary: at `date`, the schedule enters `phase`.
 struct Transition: Equatable {
     let date: Date
-    let mode: AppearanceMode
+    let phase: SchedulePhase
 }
 
 // MARK: - Scheduler
 
 /// Unifies sun-based and fixed-time scheduling behind two questions:
-///   • what mode *should* be in effect at a given instant, and
+///   • what phase *should* be in effect at a given instant, and
 ///   • when is the next boundary (transition) after a given instant.
 ///
 /// Both are answered from a single sorted list of `Transition`s spanning a few
@@ -61,10 +81,10 @@ struct Scheduler {
 
     enum Config: Equatable {
         /// Sun-based. Offsets are minutes applied to the NOAA event:
-        /// `darkOffset` shifts sunset (negative = earlier), `lightOffset` shifts sunrise.
-        case sun(latitude: Double, longitude: Double, darkOffsetMinutes: Int, lightOffsetMinutes: Int)
+        /// `nighttimeOffset` shifts sunset (negative = earlier), `daytimeOffset` shifts sunrise.
+        case sun(latitude: Double, longitude: Double, nighttimeOffsetMinutes: Int, daytimeOffsetMinutes: Int)
         /// Fixed clock times, expressed as minutes since local midnight.
-        case fixed(darkMinutes: Int, lightMinutes: Int)
+        case fixed(nighttimeMinutes: Int, daytimeMinutes: Int)
     }
 
     let config: Config
@@ -92,35 +112,34 @@ struct Scheduler {
     /// in chronological order. May be empty on polar days in sun mode.
     private func transitions(forDayStartingAt dayMidnight: Date) -> [Transition] {
         switch config {
-        case let .sun(lat, lon, darkOff, lightOff):
+        case let .sun(lat, lon, nighttimeOff, daytimeOff):
             let times = SunCalculator.sunTimes(latitude: lat, longitude: lon,
                                                date: dayMidnight, timeZone: timeZone)
             var out: [Transition] = []
             if case .time(let sunrise) = times.sunrise {
-                out.append(Transition(date: sunrise.addingTimeInterval(Double(lightOff) * 60),
-                                      mode: .light))
+                out.append(Transition(date: sunrise.addingTimeInterval(Double(daytimeOff) * 60),
+                                      phase: .day))
             }
             if case .time(let sunset) = times.sunset {
-                out.append(Transition(date: sunset.addingTimeInterval(Double(darkOff) * 60),
-                                      mode: .dark))
+                out.append(Transition(date: sunset.addingTimeInterval(Double(nighttimeOff) * 60),
+                                      phase: .night))
             }
             return out.sorted { $0.date < $1.date }
 
-        case let .fixed(darkMinutes, lightMinutes):
-            return [Transition(date: fixedTime(on: dayMidnight, minutes: lightMinutes), mode: .light),
-                    Transition(date: fixedTime(on: dayMidnight, minutes: darkMinutes), mode: .dark)]
+        case let .fixed(nighttimeMinutes, daytimeMinutes):
+            return [Transition(date: fixedTime(on: dayMidnight, minutes: daytimeMinutes), phase: .day),
+                    Transition(date: fixedTime(on: dayMidnight, minutes: nighttimeMinutes), phase: .night)]
                 .sorted(by: Self.chronological)
         }
     }
 
     /// Deterministic ordering: by date, and on an exact tie put Dark before
-    /// Light. That makes a degenerate equal-times config (dark == light) resolve
-    /// to Light for `desiredMode` (the last transition ≤ now), matching the
-    /// "empty dark window ⇒ always light" fallback, instead of depending on an
+    /// day. That makes a degenerate equal-times config resolve to daytime for
+    /// `desiredPhase`, matching the empty-night-window fallback instead of an
     /// unstable sort.
     private static func chronological(_ a: Transition, _ b: Transition) -> Bool {
         if a.date != b.date { return a.date < b.date }
-        return a.mode == .dark && b.mode == .light
+        return a.phase == .night && b.phase == .day
     }
 
     /// The wall-clock time-of-day (`minutes` since midnight) on the given day,
@@ -148,18 +167,18 @@ struct Scheduler {
         return all.sorted(by: Self.chronological)
     }
 
-    /// The appearance that *should* be in effect at `now`.
+    /// The schedule phase in effect at `now`, independent of selected effects.
     ///
     /// = the mode of the most recent transition at/before `now`. Falls back to a
     /// polar-safe rule when the window has no transition before `now` (only
     /// reachable at extreme latitudes, never for US locations).
-    func desiredMode(at now: Date) -> AppearanceMode {
+    func desiredPhase(at now: Date) -> SchedulePhase {
         let events = transitions(around: now)
         if let last = events.last(where: { $0.date <= now }) {
-            return last.mode
+            return last.phase
         }
         // No transition before `now` in the window → polar fallback.
-        return polarFallbackMode(at: now)
+        return polarFallbackPhase(at: now)
     }
 
     /// The first transition strictly after `now`, if any.
@@ -175,31 +194,37 @@ struct Scheduler {
     /// re-evaluate. Returns nil when there's no upcoming transition, or it's
     /// already due/past (the caller enforces immediately in that case).
     static func fireDelay(until transition: Transition?, now: Date) -> TimeInterval? {
-        guard let transition else { return nil }
-        let delay = transition.date.timeIntervalSince(now) + 1
+        fireDelay(untilNextOf: [transition?.date].compactMap { $0 }, now: now)
+    }
+
+    /// Delay to the earliest future lifecycle event (phase boundary or override
+    /// expiry), with the same one-second schedule-advance cushion.
+    static func fireDelay(untilNextOf dates: [Date], now: Date) -> TimeInterval? {
+        guard let date = dates.filter({ $0 > now }).min() else { return nil }
+        let delay = date.timeIntervalSince(now) + 1
         return delay > 0 ? delay : nil
     }
 
     /// Polar / degenerate fallback: use today's raw NOAA geometry (sun mode) or a
     /// direct clock comparison (fixed mode) to pick a mode without transitions.
-    private func polarFallbackMode(at now: Date) -> AppearanceMode {
+    private func polarFallbackPhase(at now: Date) -> SchedulePhase {
         switch config {
         case let .sun(lat, lon, _, _):
             let times = SunCalculator.sunTimes(latitude: lat, longitude: lon,
                                                date: now, timeZone: timeZone)
             switch times.sunrise {
-            case .alwaysUp:   return .light   // sun never sets → day
-            case .alwaysDown: return .dark    // sun never rises → night
-            case .time:       return .light   // unreachable given caller; safe default
+            case .alwaysUp:   return .day
+            case .alwaysDown: return .night
+            case .time:       return .day
             }
-        case let .fixed(darkMinutes, lightMinutes):
-            guard let mid = midnight(of: now) else { return .light }
+        case let .fixed(nighttimeMinutes, daytimeMinutes):
+            guard let mid = midnight(of: now) else { return .day }
             let minutes = Int(now.timeIntervalSince(mid) / 60)
-            // Dark window = [darkMinutes, lightMinutes) treating the day cyclically.
-            if darkMinutes <= lightMinutes {
-                return (minutes >= darkMinutes && minutes < lightMinutes) ? .dark : .light
+            // Nighttime window treats the day cyclically.
+            if nighttimeMinutes <= daytimeMinutes {
+                return (minutes >= nighttimeMinutes && minutes < daytimeMinutes) ? .night : .day
             } else {
-                return (minutes >= darkMinutes || minutes < lightMinutes) ? .dark : .light
+                return (minutes >= nighttimeMinutes || minutes < daytimeMinutes) ? .night : .day
             }
         }
     }
@@ -239,13 +264,12 @@ struct Override: Codable, Equatable {
 
 // MARK: - Enforcement engine (the pure state machine — the crux)
 
-/// The result of one evaluation: the override state afterwards, the mode to
-/// enforce (nil when suspended), and the new `lastEnforced` baseline.
+/// The result of one evaluation. Nil effect targets mean "leave it untouched."
 struct EnforcementDecision: Equatable {
     var override: Override?
-    /// Mode to enforce this tick, or nil if enforcement is suspended.
-    var enforce: AppearanceMode?
-    var lastEnforced: AppearanceMode
+    var appearance: AppearanceMode?
+    var nightShift: Bool?
+    var lastAppearanceBaseline: AppearanceMode
 }
 
 /// Pure decision function shared by the live app, the self-test, and unit tests.
@@ -253,14 +277,16 @@ struct EnforcementDecision: Equatable {
 /// See the four-step state machine documented in the project notes:
 ///   1. EXPIRE a due override.
 ///   2. SUSPEND while an override is active (accept the user's current mode).
-///   3. DETECT a manual divergence (live appearance ≠ what we last set) and
+///   3. If Dark appearance is selected, DETECT a manual divergence and
 ///      convert it into a `.manual` override until the next boundary.
 ///   4. ENFORCE the scheduled mode otherwise.
 enum EnforcementEngine {
     static func decide(now: Date,
-                       currentMode: AppearanceMode,
-                       scheduledMode: AppearanceMode,
-                       lastEnforced: AppearanceMode,
+                       phase: SchedulePhase,
+                       effects: ScheduleEffects,
+                       nightShiftAvailable: Bool,
+                       currentAppearance: AppearanceMode,
+                       lastAppearanceBaseline: AppearanceMode,
                        override: Override?,
                        nextBoundary: Date) -> EnforcementDecision {
 
@@ -273,19 +299,70 @@ enum EnforcementEngine {
         // 2. SUSPEND — an override is still in force. Accept whatever the user
         //    has set as the new baseline so we don't "correct" it later.
         if let o = active {
-            return EnforcementDecision(override: o, enforce: nil, lastEnforced: currentMode)
+            return EnforcementDecision(override: o, appearance: nil, nightShift: nil,
+                                       lastAppearanceBaseline: currentAppearance)
         }
 
         // 3. DETECT MANUAL DIVERGENCE — the live appearance differs from the
         //    schedule AND from what we last set. Only the user could have done
         //    that, so honor it until the next natural boundary instead of
         //    snapping back on this tick.
-        if currentMode != scheduledMode && currentMode != lastEnforced {
+        let desiredAppearance = phase.appearance
+        if effects.darkAppearance,
+           currentAppearance != desiredAppearance,
+           currentAppearance != lastAppearanceBaseline {
             let ov = Override(reason: .manual, until: nextBoundary)
-            return EnforcementDecision(override: ov, enforce: nil, lastEnforced: currentMode)
+            return EnforcementDecision(override: ov, appearance: nil, nightShift: nil,
+                                       lastAppearanceBaseline: currentAppearance)
         }
 
-        // 4. ENFORCE the schedule (idempotently downstream).
-        return EnforcementDecision(override: nil, enforce: scheduledMode, lastEnforced: scheduledMode)
+        // 4. Reconcile only selected, available effects. In particular, a
+        // Night Shift-only schedule never interprets nighttime as Dark Mode.
+        return EnforcementDecision(
+            override: nil,
+            appearance: effects.darkAppearance ? desiredAppearance : nil,
+            nightShift: effects.nightShift && nightShiftAvailable ? phase.isNight : nil,
+            lastAppearanceBaseline: effects.darkAppearance ? desiredAppearance : currentAppearance
+        )
+    }
+}
+
+struct NightShiftMutationPlan: Equatable {
+    let mutation: Bool?
+    /// True only when a live read proves the mutation changes state.
+    let isKnownChange: Bool
+}
+
+/// Pure idempotency gate for the guarded private Night Shift adapter. A live
+/// read wins; the session cache is only a fallback when status cannot be read.
+enum NightShiftMutationPlanner {
+    static func plan(desired: Bool?, live: Bool?, lastApplied: Bool?) -> NightShiftMutationPlan {
+        guard let desired else {
+            return NightShiftMutationPlan(mutation: nil, isKnownChange: false)
+        }
+        if let live {
+            return NightShiftMutationPlan(
+                mutation: live == desired ? nil : desired,
+                isKnownChange: live != desired
+            )
+        }
+        return NightShiftMutationPlan(
+            mutation: lastApplied == desired ? nil : desired,
+            isKnownChange: false
+        )
+    }
+}
+
+enum NightShiftOwnershipPolicy {
+    /// A proven off→on change is scheduler-owned. An unknown write never
+    /// claims ownership, and any successful off result releases ownership.
+    static func ownershipAfterSuccessfulMutation(
+        previous: Bool, mutation: Bool, isKnownChange: Bool
+    ) -> Bool {
+        mutation ? (previous || isKnownChange) : false
+    }
+
+    static func needsCleanupWhenDisabled(ownedActive: Bool) -> Bool {
+        ownedActive
     }
 }
