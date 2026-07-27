@@ -14,6 +14,7 @@ import AppKit
 
 struct PopoverView: View {
     @EnvironmentObject var model: AppModel
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         ScrollView {
@@ -36,17 +37,39 @@ struct PopoverView: View {
             }
             .padding(16)
             .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: PopoverContentHeightKey.self,
+                        value: geometry.size.height
+                    )
+                }
+            }
         }
-        // Size to content, but never taller than the screen it opens on — so the
-        // popover only scrolls if the content genuinely can't fit the display
-        // (e.g. very large system text), instead of at an arbitrary fixed height.
-        .frame(maxHeight: maxPopoverHeight)
+        // ScrollView does not publish its content's ideal height to the
+        // MenuBarExtra window. Measure it explicitly so the window opens tall
+        // enough to show everything, while retaining scrolling on short screens.
+        .frame(
+            minHeight: fittedPopoverHeight,
+            idealHeight: fittedPopoverHeight,
+            maxHeight: fittedPopoverHeight ?? maxPopoverHeight
+        )
+        .onPreferenceChange(PopoverContentHeightKey.self) { height in
+            contentHeight = height
+        }
+    }
+
+    private var fittedPopoverHeight: CGFloat? {
+        guard contentHeight > 0 else { return nil }
+        return min(contentHeight, maxPopoverHeight)
     }
 
     /// The usable height of the screen the menu bar lives on, minus a small
     /// margin. Falls back to a generous constant if no screen is reported.
     private var maxPopoverHeight: CGFloat {
-        let visible = NSScreen.main?.visibleFrame.height ?? 900
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+        let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? 900
         return max(320, visible - 24)
     }
 
@@ -65,11 +88,7 @@ struct PopoverView: View {
         }
     }
 
-    // MARK: "Right now" — pause / resume (feature 1) + on-demand preview
-    //
-    // Both temporarily override the schedule, so they share one section: the
-    // status/banner up top, then whichever controls apply, then the preview
-    // (test) buttons that are always available.
+    // MARK: "Right now" — selected effects + one contextual action
 
     private var nowSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -78,8 +97,6 @@ struct PopoverView: View {
             if let description = model.overrideDescription {
                 Label(description, systemImage: model.isEarlySwitch ? "clock.arrow.circlepath" : "pause.circle.fill")
                     .font(.caption).foregroundStyle(.orange)
-                Button("Back to schedule") { model.resumeNow() }
-                    .controlSize(.small)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: model.scheduleMatches ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
@@ -87,21 +104,25 @@ struct PopoverView: View {
                     Text(scheduleStatus)
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                ViewThatFits(in: .horizontal) {
-                    pauseButtons(axis: .horizontal)
-                    pauseButtons(axis: .vertical)
+            }
+
+            if model.isOverridden {
+                Button { model.resumeNow() } label: {
+                    Label("Resume schedule", systemImage: "calendar.badge.clock")
                 }
-                // Bring the next scheduled change forward: switch to the upcoming
-                // mode now (also confirms switching works) instead of waiting for
-                // the boundary. Holds until then, then rejoins the schedule.
+                .controlSize(.small)
+                .help("End the current override and return to the schedule")
+            } else {
                 Button { model.switchToNextModeEarly() } label: {
-                    Label("Start \(model.earlySwitchTarget.label.lowercased()) effects now",
+                    Label("Start \(model.earlySwitchTarget.label.lowercased()) now",
                           systemImage: model.earlySwitchTarget.isNight ? "moon.stars.fill" : "sun.max.fill")
                 }
                 .controlSize(.small)
                 .disabled(!model.hasAvailableEffects)
-                .help("Bring the next phase's selected effects forward to now")
+                .help("Start the next scheduled mode now")
             }
+
+            nighttimeEffects
 
             if let error = model.earlySwitchError {
                 Text(error).font(.caption).foregroundStyle(.red)
@@ -110,34 +131,11 @@ struct PopoverView: View {
         }
     }
 
-    private func pauseButtons(axis: Axis) -> some View {
-        Group {
-            if axis == .horizontal {
-                HStack {
-                    Button("Pause 1 hour") { model.pauseForOneHour() }
-                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
-                }
-            } else {
-                VStack(alignment: .leading) {
-                    Button("Pause 1 hour") { model.pauseForOneHour() }
-                    Button("Pause until next \(nextBoundaryWord)") { model.pauseUntilNextBoundary() }
-                }
-            }
-        }
-        .controlSize(.small)
-    }
-
     private var scheduleStatus: String {
         if !model.hasAvailableEffects { return "Schedule active — no available effects selected" }
         return model.scheduleMatches
             ? "\(model.scheduledPhase.label) effects are in place"
             : "Adjusting \(model.scheduledPhase.label.lowercased()) effects…"
-    }
-
-    /// "sunrise"/"sunset" in sun mode, "transition" in fixed mode.
-    private var nextBoundaryWord: String {
-        guard model.scheduleMode == .sun, let next = model.nextTransition else { return "transition" }
-        return next.phase.isNight ? "sunset" : "sunrise"
     }
 
     private var permissionHint: some View {
@@ -165,8 +163,6 @@ struct PopoverView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            nighttimeEffects
-
             if model.scheduleMode == .sun {
                 offsetRow(label: "Nighttime offset",
                           minutes: model.nighttimeOffsetMinutes,
@@ -191,20 +187,26 @@ struct PopoverView: View {
     }
 
     private var nighttimeEffects: some View {
-        GroupBox("Nighttime effects") {
-            VStack(alignment: .leading, spacing: 5) {
-                Toggle("Dark appearance", isOn: Binding(
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Nighttime effects")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text("Dark appearance")
+                Spacer()
+                Toggle("", isOn: Binding(
                     get: { model.darkAppearanceEnabled },
                     set: { model.setDarkAppearanceEnabled($0) }
                 ))
                 .toggleStyle(.switch)
+                .labelsHidden()
                 .help("Switch between Dark appearance at night and Light appearance during the day")
                 .accessibilityLabel("Dark appearance")
+            }
 
-                Toggle(isOn: Binding(
-                    get: { model.nightShiftEnabled },
-                    set: { model.setNightShiftEnabled($0) }
-                )) {
+            if model.supportsNightShift {
+                HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Night Shift")
                         if !model.nightShiftAvailable {
@@ -218,56 +220,78 @@ struct PopoverView: View {
                                 .foregroundStyle(.red)
                         }
                     }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { model.nightShiftEnabled },
+                        set: { model.setNightShiftEnabled($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(!model.nightShiftAvailable)
+                    .help(model.nightShiftAvailable
+                          ? "Turn on Night Shift at night and off during the day"
+                          : "Night Shift control is unavailable on this Mac")
+                    .accessibilityLabel("Night Shift")
                 }
-                .toggleStyle(.switch)
-                .disabled(!model.nightShiftAvailable)
-                .help(model.nightShiftAvailable
-                      ? "Turn on Night Shift at night and off during the day"
-                      : "Night Shift control is unavailable on this Mac")
-                .accessibilityLabel("Night Shift")
             }
-            .font(.subheadline)
         }
+        .font(.subheadline)
     }
 
     private func offsetRow(label: String, minutes: Int,
                            set: @escaping (Int) -> Void, anchor: String) -> some View {
         let range = SettingsStore.offsetRange
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(label).font(.subheadline).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(.subheadline)
                 Spacer()
-                // Live magnitude as you drag, e.g. "30m before sunset".
                 Text(offsetDescription(minutes, anchor: anchor))
-                    .font(.caption).monospacedDigit()
-                // Reset to the exact sun event; only shown when there's an offset.
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(minutes == 0 ? .secondary : .primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.quaternary, in: Capsule())
                 if minutes != 0 {
-                    Button("Reset") { set(0) }
-                        .controlSize(.small)
-                        .buttonStyle(.borderless)
+                    Button { set(0) } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.caption)
+                    }
+                        .buttonStyle(.plain)
                         .help("Reset to \(anchor) (no offset)")
+                        .accessibilityLabel("Reset \(label.lowercased())")
                 }
             }
-            // Slider gives a visual sense of how large the offset is (±3h) while
-            // setting it; snaps to 5-minute steps like the old stepper.
+            // A continuous native track avoids macOS's step tick marks. The
+            // binding still rounds to five-minute increments for useful values.
             Slider(value: Binding(get: { Double(minutes) },
-                                  set: { set(Int($0.rounded())) }),
-                   in: Double(range.lowerBound)...Double(range.upperBound),
-                   step: 5) {
+                                  set: { set(Int(($0 / 5).rounded()) * 5) }),
+                   in: Double(range.lowerBound)...Double(range.upperBound)) {
                 Text(label)
-            } minimumValueLabel: {
-                Text("−3h").font(.caption2).foregroundStyle(.secondary)
-            } maximumValueLabel: {
-                Text("+3h").font(.caption2).foregroundStyle(.secondary)
             }
             .labelsHidden()
+            .accessibilityValue(offsetDescription(minutes, anchor: anchor))
+            .help("Drag left for before \(anchor), or right for after \(anchor)")
         }
     }
 
     private func offsetDescription(_ minutes: Int, anchor: String) -> String {
-        if minutes == 0 { return "at \(anchor)" }
+        if minutes == 0 { return "At \(anchor)" }
         let mag = abs(minutes)
-        return minutes < 0 ? "\(mag)m before \(anchor)" : "\(mag)m after \(anchor)"
+        let duration: String
+        if mag < 60 {
+            duration = "\(mag) min"
+        } else if mag.isMultiple(of: 60) {
+            let hours = mag / 60
+            duration = "\(hours) \(hours == 1 ? "hr" : "hrs")"
+        } else {
+            let hours = mag / 60
+            duration = "\(hours) hr \(mag % 60) min"
+        }
+        return minutes < 0
+            ? "\(duration) before \(anchor)"
+            : "\(duration) after \(anchor)"
     }
 
     private func fixedTimeRow(label: String, minutes: Int,
@@ -370,10 +394,18 @@ struct PopoverView: View {
             }
         default:  // any authorized variant
             VStack(alignment: .leading, spacing: 4) {
-                Label("Location access granted", systemImage: "location.fill")
-                    .font(.caption).foregroundStyle(.green)
-                Button("Refresh location") { model.useMyLocation() }
-                    .controlSize(.small)
+                if model.isLocating {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Finding your location…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Label("Location access granted", systemImage: "location.fill")
+                        .font(.caption).foregroundStyle(.green)
+                    Button("Refresh location") { model.useMyLocation() }
+                        .controlSize(.small)
+                }
             }
         }
         if let error = model.locationError {
@@ -387,22 +419,30 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Preferences").font(.subheadline).bold()
 
-            Toggle(isOn: Binding(
-                get: { model.launchAtLogin },
-                set: { model.setLaunchAtLogin($0) })) {
+            HStack {
                 Text("Launch at Login").font(.subheadline)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { model.launchAtLogin },
+                    set: { model.setLaunchAtLogin($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityLabel("Launch at Login")
             }
-            .toggleStyle(.switch)
             if let error = model.launchAtLoginError {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
 
-            Toggle(isOn: Binding(
-                get: { model.notificationsEnabled },
-                set: { model.setNotificationsEnabled($0) })) {
+            HStack {
                 Text("Notify on transition").font(.subheadline)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { model.notificationsEnabled },
+                    set: { model.setNotificationsEnabled($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityLabel("Notify on transition")
             }
-            .toggleStyle(.switch)
         }
     }
 
@@ -420,5 +460,13 @@ struct PopoverView: View {
                 Text(value).font(.subheadline).bold()
             }
         }
+    }
+}
+
+private struct PopoverContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

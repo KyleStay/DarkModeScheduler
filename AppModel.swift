@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published var locationSource: LocationSource = .zip
     @Published private(set) var locationAuthStatus: CLAuthorizationStatus = .notDetermined
     @Published private(set) var locationError: String?
+    @Published private(set) var isLocating = false
 
     // MARK: Sun / schedule display
     @Published private(set) var sunrise: SunEvent = .alwaysDown
@@ -91,8 +92,13 @@ final class AppModel: ObservableObject {
     var hasAvailableEffects: Bool {
         darkAppearanceEnabled || (nightShiftEnabled && nightShiftAvailable)
     }
+    var supportsNightShift: Bool { DistributionChannel.current.supportsNightShift }
+    var distributionChannelLabel: String { DistributionChannel.current.label }
     var selectedEffects: ScheduleEffects {
-        ScheduleEffects(darkAppearance: darkAppearanceEnabled, nightShift: nightShiftEnabled)
+        ScheduleEffects(
+            darkAppearance: darkAppearanceEnabled,
+            nightShift: supportsNightShift && nightShiftEnabled
+        )
     }
     var isOverridden: Bool { override != nil }
     /// True while a "Switch early" override is holding the brought-forward mode.
@@ -103,7 +109,7 @@ final class AppModel: ObservableObject {
     private let geocoder = GeocodeService()
     private let appearance = AppearanceController()
     private let notifications = NotificationService()
-    private let nightShift: NightShiftControlling = CoreBrightnessNightShift()
+    private let nightShift: NightShiftControlling = makeNightShiftController()
     let locationService = LocationService()
     /// Read live (not captured once at launch) so scheduling follows the
     /// device's current time zone even if it changes while the app is running.
@@ -133,9 +139,9 @@ final class AppModel: ObservableObject {
         locationSource = settings.locationSource
         notificationsEnabled = settings.notificationsEnabled
         darkAppearanceEnabled = settings.darkAppearanceEnabled
-        nightShiftEnabled = settings.nightShiftEnabled
-        nightShiftOwnedActive = settings.nightShiftOwnedActive
-        pendingNightShiftDeactivation = settings.nightShiftCleanupPending
+        nightShiftEnabled = supportsNightShift && settings.nightShiftEnabled
+        nightShiftOwnedActive = supportsNightShift && settings.nightShiftOwnedActive
+        pendingNightShiftDeactivation = supportsNightShift && settings.nightShiftCleanupPending
         if nightShiftEnabled, pendingNightShiftDeactivation {
             pendingNightShiftDeactivation = false
             settings.nightShiftCleanupPending = false
@@ -178,6 +184,7 @@ final class AppModel: ObservableObject {
     private func wireLocationService() {
         locationService.onResolved = { [weak self] resolved in
             guard let self else { return }
+            self.isLocating = false
             // Ignore a late fix if the user has since switched back to a postal
             // code, so a stale CoreLocation result can't overwrite a newer choice.
             guard self.locationSource == .coreLocation else {
@@ -191,16 +198,19 @@ final class AppModel: ObservableObject {
             self.scheduleInputsDidChange()
         }
         locationService.onError = { [weak self] message in
+            self?.isLocating = false
             self?.locationError = message
+        }
+        locationService.onAuthorizationChanged = { [weak self] status in
+            self?.locationAuthStatus = status
         }
         locationService.onAuthorizationGranted = { [weak self] in
             guard let self else { return }
             // Access was just granted (prompt approved, or enabled later in
-            // System Settings). If the user still wants My Location and we don't
-            // have a fix yet, fetch one automatically instead of making them
-            // click again.
-            guard self.locationSource == .coreLocation,
-                  self.location?.source != .coreLocation else { return }
+            // System Settings). Complete the explicit in-flight request even if
+            // an older CoreLocation result is cached; otherwise granting access
+            // can appear to do nothing and leave the old place in use.
+            guard self.locationSource == .coreLocation, self.isLocating else { return }
             Log.location.info("Access granted; auto-fetching location")
             self.locationError = nil
             self.locationService.requestLocation()
@@ -702,6 +712,12 @@ final class AppModel: ObservableObject {
 
     func useMyLocation() {
         locationError = nil
+        guard CLLocationManager.locationServicesEnabled() else {
+            isLocating = false
+            locationError = "Location Services is turned off for this Mac. Turn it on in System Settings → Privacy & Security → Location Services."
+            return
+        }
+        isLocating = true
         locationService.requestLocation()
     }
 
@@ -746,6 +762,7 @@ final class AppModel: ObservableObject {
     }
 
     func setNightShiftEnabled(_ enabled: Bool) {
+        guard supportsNightShift else { return }
         nightShiftEnabled = enabled
         settings.nightShiftEnabled = enabled
         if enabled {

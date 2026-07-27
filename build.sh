@@ -5,6 +5,12 @@
 #
 # Idempotent: safe to re-run. Fails loudly on any error.
 #
+# Config:
+#   BUILD_ARCH  target architecture: universal (default), arm64, or x86_64
+#   DISTRIBUTION_CHANNEL  full (default) or app-store
+#   APP_OUTPUT_DIR  optional product directory override
+#   CODESIGN_IDENTITY  optional Developer ID override; ad-hoc signing is rejected
+#
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -15,9 +21,37 @@ BUNDLE_ID="com.kyle.darkmodescheduler"
 VERSION="2.8"
 BUILD_NUMBER="10"
 MIN_MACOS="13.0"
+BUILD_ARCH="${BUILD_ARCH:-universal}"
+DISTRIBUTION_CHANNEL="${DISTRIBUTION_CHANNEL:-full}"
 
-BUILD_DIR=".build"
-APP_BUNDLE="${APP_NAME}.app"
+case "$DISTRIBUTION_CHANNEL" in
+    full)
+        BUILD_DIR=".build/full-intermediates"
+        APP_OUTPUT_DIR="${APP_OUTPUT_DIR:-.}"
+        SWIFT_CHANNEL_FLAGS=(-D FULL)
+        DEFAULT_ENTITLEMENTS="DarkModeScheduler.entitlements"
+        ;;
+    app-store)
+        BUILD_DIR=".build/app-store-intermediates"
+        APP_OUTPUT_DIR="${APP_OUTPUT_DIR:-.build/app-store-product}"
+        SWIFT_CHANNEL_FLAGS=(-D APP_STORE)
+        DEFAULT_ENTITLEMENTS="DarkModeScheduler-AppStore.entitlements"
+        ;;
+    *)
+        echo "✗ Unsupported DISTRIBUTION_CHANNEL '$DISTRIBUTION_CHANNEL' (expected full or app-store)." >&2
+        exit 1
+        ;;
+esac
+
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Kyle Stay (TF2BG2VDPD)}"
+CODESIGN_ENTITLEMENTS="${CODESIGN_ENTITLEMENTS:-$DEFAULT_ENTITLEMENTS}"
+CODESIGN_RUNTIME="${CODESIGN_RUNTIME:-1}"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "✗ Ad-hoc signing is prohibited. Use the configured Developer ID identity." >&2
+    exit 1
+fi
+
+APP_BUNDLE="${APP_OUTPUT_DIR}/${APP_NAME}.app"
 CONTENTS="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS}/MacOS"
 RESOURCES_DIR="${CONTENTS}/Resources"
@@ -30,41 +64,43 @@ SOURCES=(
     Support.swift
     Scheduler.swift
     SunCalculator.swift
+    DistributionChannel.swift
 )
+
+case "$BUILD_ARCH" in
+    universal) TARGET_ARCHS=(x86_64 arm64) ;;
+    x86_64|arm64) TARGET_ARCHS=("$BUILD_ARCH") ;;
+    *)
+        echo "✗ Unsupported BUILD_ARCH '$BUILD_ARCH' (expected universal, x86_64, or arm64)." >&2
+        exit 1
+        ;;
+esac
 
 echo "==> Cleaning previous bundle…"
 rm -rf "$APP_BUNDLE"
-mkdir -p "$BUILD_DIR" "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$BUILD_DIR" "$APP_OUTPUT_DIR" "$MACOS_DIR" "$RESOURCES_DIR"
 
-# --- Compile. Build a universal binary when possible; always require the host
-#     arch. Treat warnings as errors so the build is warnings-clean by contract.
+# --- Compile. The requested architecture is explicit so release builds cannot
+#     silently fall back from universal to a single architecture. Treat warnings
+#     as errors so the build is warnings-clean by contract.
 compile_arch() {
     local arch="$1"
     local out="$2"
     /usr/bin/swiftc -O \
         -warnings-as-errors \
         -target "${arch}-apple-macos${MIN_MACOS}" \
+        "${SWIFT_CHANNEL_FLAGS[@]}" \
         -o "$out" \
         "${SOURCES[@]}"
 }
 
-HOST_ARCH="$(uname -m)"
 SLICES=()
-
-echo "==> Compiling host slice (${HOST_ARCH})…"
-compile_arch "$HOST_ARCH" "${BUILD_DIR}/${APP_NAME}-${HOST_ARCH}"
-SLICES+=("${BUILD_DIR}/${APP_NAME}-${HOST_ARCH}")
-
-# Attempt the other arch for a universal binary; non-fatal if it can't build.
-OTHER_ARCH="arm64"
-[ "$HOST_ARCH" = "arm64" ] && OTHER_ARCH="x86_64"
-echo "==> Attempting ${OTHER_ARCH} slice for universal binary…"
-if compile_arch "$OTHER_ARCH" "${BUILD_DIR}/${APP_NAME}-${OTHER_ARCH}" 2>/dev/null; then
-    SLICES+=("${BUILD_DIR}/${APP_NAME}-${OTHER_ARCH}")
-    echo "    ✓ ${OTHER_ARCH} slice built"
-else
-    echo "    (skipped ${OTHER_ARCH}; building single-arch ${HOST_ARCH})"
-fi
+for arch in "${TARGET_ARCHS[@]}"; do
+    echo "==> Compiling ${arch} slice…"
+    slice="${BUILD_DIR}/${APP_NAME}-${arch}"
+    compile_arch "$arch" "$slice"
+    SLICES+=("$slice")
+done
 
 echo "==> Assembling binary…"
 if [ "${#SLICES[@]}" -gt 1 ]; then
@@ -72,7 +108,7 @@ if [ "${#SLICES[@]}" -gt 1 ]; then
     echo "    universal: $(lipo -archs "${MACOS_DIR}/${APP_NAME}")"
 else
     cp "${SLICES[0]}" "${MACOS_DIR}/${APP_NAME}"
-    echo "    single-arch: ${HOST_ARCH}"
+    echo "    single-arch: ${TARGET_ARCHS[0]}"
 fi
 chmod +x "${MACOS_DIR}/${APP_NAME}"
 
@@ -110,6 +146,10 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <string>Dark Mode Scheduler can use your location to compute local sunrise and sunset times. This is optional — a postal code works without it.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Dark Mode Scheduler</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>DarkModeSchedulerDistributionChannel</key>
+    <string>${DISTRIBUTION_CHANNEL}</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>
@@ -119,12 +159,11 @@ PLIST
 # Also stamp a PkgInfo for completeness.
 printf 'APPL????' > "${CONTENTS}/PkgInfo"
 
-# --- Code signing. Defaults to ad-hoc ("-") for local dev; release.sh overrides
-#     these to sign with Developer ID + Hardened Runtime + entitlements.
-#       CODESIGN_IDENTITY    signing identity (default "-" = ad-hoc)
+# --- Code signing. Every app build is Developer ID signed. Local builds may be
+#     unnotarized, but ad-hoc and unsigned app bundles are prohibited.
+#       CODESIGN_IDENTITY    signing identity (default: Kyle's Developer ID)
 #       CODESIGN_ENTITLEMENTS  path to an entitlements plist (optional)
-#       CODESIGN_RUNTIME     non-empty → enable the Hardened Runtime
-SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+#       CODESIGN_RUNTIME     non-empty → enable the Hardened Runtime (default on)
 CODESIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
 if [ -n "${CODESIGN_RUNTIME:-}" ]; then
     CODESIGN_ARGS+=(--options runtime)
@@ -132,13 +171,8 @@ fi
 if [ -n "${CODESIGN_ENTITLEMENTS:-}" ]; then
     CODESIGN_ARGS+=(--entitlements "$CODESIGN_ENTITLEMENTS")
 fi
-if [ "$SIGN_IDENTITY" = "-" ]; then
-    echo "==> Ad-hoc code signing…"
-    CODESIGN_ARGS+=(--timestamp=none)          # ad-hoc can't use the timestamp server
-else
-    echo "==> Code signing as: ${SIGN_IDENTITY}…"
-    CODESIGN_ARGS+=(--timestamp)               # secure timestamp (required for notarization)
-fi
+echo "==> Code signing as: ${SIGN_IDENTITY}…"
+CODESIGN_ARGS+=(--timestamp)
 # No --deep: the app has no nested code (single binary), so signing the bundle
 # directly is correct and avoids --deep's deprecated behavior.
 codesign "${CODESIGN_ARGS[@]}" "$APP_BUNDLE"
@@ -148,6 +182,7 @@ codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
 echo
 echo "✅ Build complete."
+echo "   Channel:    ${DISTRIBUTION_CHANNEL}"
 echo "   App bundle: $(pwd)/${APP_BUNDLE}"
 echo "   Launch with: open \"${APP_BUNDLE}\""
 echo "   Self-test:   \"${MACOS_DIR}/${APP_NAME}\" --selftest"

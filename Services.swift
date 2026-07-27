@@ -3,7 +3,9 @@ import AppKit
 import Combine
 import CoreLocation
 import UserNotifications
+#if !APP_STORE
 import ObjectiveC
+#endif
 
 // =============================================================================
 // Services.swift — the app's side-effecting adapters:
@@ -195,6 +197,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     /// Called on the main thread with a resolved fix / a human-readable error.
     var onResolved: ((ResolvedLocation) -> Void)?
     var onError: ((String) -> Void)?
+    var onAuthorizationChanged: ((CLAuthorizationStatus) -> Void)?
     /// Called on the main thread whenever authorization becomes granted (via the
     /// prompt OR later in System Settings). The owner decides whether to fetch.
     var onAuthorizationGranted: (() -> Void)?
@@ -241,6 +244,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         let status = manager.authorizationStatus
         DispatchQueue.main.async {
             self.authorizationStatus = status
+            self.onAuthorizationChanged?(status)
             Log.location.info("Authorization changed: \(status.rawValue)")
             // Fires for the initial prompt AND for later changes in System
             // Settings. Notify the owner on any granted transition so it can
@@ -279,7 +283,20 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Log.location.error("Location error: \(error.localizedDescription, privacy: .public)")
         DispatchQueue.main.async {
-            self.onError?("Couldn't get your location. Try again or use a postal code.")
+            if let locationError = error as? CLError {
+                switch locationError.code {
+                case .denied:
+                    self.onError?("Location access is off for Dark Mode Scheduler. Enable it in System Settings → Privacy & Security → Location Services.")
+                case .network:
+                    self.onError?("Location couldn't be resolved because the network is unavailable. Try again when you're online.")
+                case .locationUnknown:
+                    self.onError?("Your Mac couldn't determine its location yet. Check Wi-Fi, then try again.")
+                default:
+                    self.onError?("Couldn't get your location (\(locationError.localizedDescription)). Try again or use a postal code.")
+                }
+            } else {
+                self.onError?("Couldn't get your location. Try again or use a postal code.")
+            }
         }
     }
 }
@@ -338,6 +355,23 @@ protocol NightShiftControlling {
     @discardableResult func setActive(_ active: Bool) -> Bool
 }
 
+/// Store-safe fallback. Keeping this adapter available in both channels lets
+/// the model stay shared while the private implementation is compiled out.
+struct UnavailableNightShift: NightShiftControlling {
+    let isAvailable = false
+    var activeState: Bool? { nil }
+    func setActive(_ active: Bool) -> Bool { false }
+}
+
+func makeNightShiftController() -> NightShiftControlling {
+    #if APP_STORE
+    return UnavailableNightShift()
+    #else
+    return CoreBrightnessNightShift()
+    #endif
+}
+
+#if !APP_STORE
 /// Night Shift has **no public API**. It lives behind the private
 /// `CBBlueLightClient` class in the CoreBrightness framework. Rather than link
 /// that private framework (fragile, can break at launch across OS versions), we
@@ -347,7 +381,6 @@ protocol NightShiftControlling {
 final class CoreBrightnessNightShift: NightShiftControlling {
 
     private typealias SetEnabledIMP = @convention(c) (AnyObject, Selector, ObjCBool) -> ObjCBool
-
     private typealias GetStatusIMP = @convention(c) (
         AnyObject, Selector, UnsafeMutableRawPointer
     ) -> ObjCBool
@@ -453,3 +486,4 @@ final class CoreBrightnessNightShift: NightShiftControlling {
         return ok.boolValue
     }
 }
+#endif

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "darkmode-scheduler",
+  "name": "DarkMode Scheduler",
+  "artifactBaseName": "DarkModeScheduler",
+  "versionCommand": ["./Scripts/project-publisher-version.sh"],
+  "releaseCommand": ["./Scripts/project-publisher-release.sh"],
+  "verifyCommand": ["./Scripts/project-publisher-verify.sh"],
+  "architectures": ["x86_64", "arm64", "universal"],
+  "formats": ["dmg"]
+}
