@@ -12,6 +12,9 @@ or neither without surrendering your current appearance choice.
   result is cached; it's only re-fetched when you change the postal code.
 - Menu-bar-only (`LSUIElement`) — no Dock icon.
 - Swift + SwiftUI `MenuBarExtra`, macOS 13+. **Zero third-party dependencies.**
+- One shared source tree produces a **Full** direct-download edition and a
+  sandboxed **App Store** edition. The Store edition omits Night Shift because
+  macOS exposes no public API for it.
 
 ---
 
@@ -19,14 +22,14 @@ or neither without surrendering your current appearance choice.
 
 | # | Feature | Summary |
 |---|---------|---------|
-| 1 | **Manual override / pause** | Pause every scheduled effect for 1 hour or until the next boundary, then reconcile on resume. When Dark appearance is selected, manual appearance changes are honored until the next boundary. |
+| 1 | **Start / resume** | Start the next scheduled mode now, then resume the schedule with the same contextual button. When Dark appearance is selected, manual appearance changes are honored until the next boundary. |
 | 2 | **Fixed-schedule mode** | Toggle between *Sun-based* and *Fixed times* (pick explicit nighttime/daytime boundaries). All effects share the same phase, wake, and timer logic. |
 | 3 | **Sun-time offsets** | Shift the nighttime and daytime boundaries relative to sunset and sunrise by ±180 minutes. |
 | 4 | **Optional auto-location** | A "My Location" source uses CoreLocation as an alternative to a manual postal code, with clear inline UI for every authorization state. Postal code stays the default and the fallback; Location Services is entirely optional. |
 | 5 | **Non-US locations** | Enter a country code + postal code (e.g. `GB SW1`, `DE 10115`). US 5-digit zips remain the default happy path. Differing response shapes and not-found/offline cases are handled gracefully. |
 | 6 | **Transition notifications** (opt-in, default off) | Posts only when a selected effect actually changes; repeated ticks never notify. |
 | 7 | **Menu-bar glance** | Surfaces the current phase and next nighttime/daytime boundary, or the pause state. |
-| 8 | **Nighttime effects** | Independent **Dark appearance** (default on) and **Night Shift** (default off) controls live directly below the schedule picker. |
+| 8 | **Nighttime effects** | Independent **Dark appearance** (default on) and **Night Shift** (default off) controls live in **Right now** with the contextual Start / Resume action. |
 | 9 | **Switch early** | Bring the next phase's selected effects forward, hold them until the boundary, then rejoin automatically. Night Shift-only use never requests Appearance Automation permission. |
 
 ---
@@ -39,9 +42,14 @@ or neither without surrendering your current appearance choice.
 
 ## Install (end users)
 
-Download **`DarkModeScheduler.dmg`**, double-click it, and **drag the app onto the
+Download the DMG for your Mac, double-click it, and **drag the app onto the
 Applications folder** shown in the window. Then launch it from Applications — a
 sun/moon icon appears in the menu bar; click it to open the popover.
+
+- **`DarkModeScheduler-Apple-Silicon.dmg`** — M1, M2, M3, M4, and newer Macs.
+- **`DarkModeScheduler-Intel.dmg`** — Intel-based Macs.
+- **`DarkModeScheduler-Universal.dmg`** — contains both architectures; use this
+  when the destination Mac is unknown.
 
 The release DMG is **signed with a Developer ID and notarized by Apple**, so
 Gatekeeper opens it with no "unidentified developer" warning. (See
@@ -57,16 +65,27 @@ produced.) The **first time** it changes the appearance, macOS asks for
 
 This compiles all Swift sources with `swiftc` (`-warnings-as-errors`, so the
 build is warnings-clean by contract), assembles `DarkModeScheduler.app` with a
-correct `Info.plist`, and **ad-hoc** code-signs it for local use. It builds a
-**universal** (x86_64 + arm64) binary when both slices compile, otherwise the
-host architecture only. The script is idempotent and fails loudly
-(`set -euo pipefail`).
+correct `Info.plist`, and signs it with Kyle's Developer ID, Hardened Runtime,
+the channel-appropriate entitlements, and a secure timestamp. Ad-hoc signing is
+prohibited. It builds a **universal** (x86_64 + arm64) binary by default. Set
+`BUILD_ARCH=arm64` or `BUILD_ARCH=x86_64` for a single-architecture development
+build. The script is idempotent and fails loudly (`set -euo pipefail`).
 
 Output: `./DarkModeScheduler.app` — run it with `open DarkModeScheduler.app`.
 
-> An ad-hoc build runs fine on the machine that built it, but it is **not**
-> signed for distribution. To produce a shareable, notarized DMG, use
-> [`./release.sh`](#distribution-signed--notarized-release).
+Build the sandboxed App Store channel from the same sources:
+
+```bash
+make build-app-store
+```
+
+Output: `.build/app-store-product/DarkModeScheduler.app`. Run `make verify` to
+compile and validate both product channels. See
+[`Docs/DISTRIBUTION_VARIANTS.md`](Docs/DISTRIBUTION_VARIANTS.md) for the
+capability boundary and Store submission requirements.
+
+> Ordinary builds are signed but not notarized. To produce or install a
+> notarized and stapled build, use Project Publisher as described below.
 
 ---
 
@@ -116,30 +135,30 @@ Settings / granted → refresh). If you deny it, postal code remains available.
 ### Schedule mode & tuning
 
 - Choose **Sun-based** or **Fixed times**, then select independent **Nighttime
-  effects** immediately below the picker.
+  effects** in **Right now**.
 - **Dark appearance** defaults on and switches Dark at night / Light during day.
 - **Night Shift** defaults off and can run alone. If its guarded private API is
   unavailable, only that control is disabled and the inline explanation remains.
 - Sun mode offsets the nighttime/daytime boundaries from sunset/sunrise; fixed
   mode uses explicit start times.
 
-### Pause / override
+### Start / resume
 
-- **Pause 1 hour** — suspend enforcement for an hour.
-- **Pause until next sunrise/sunset** — resume at the next natural boundary.
-- **Resume schedule now** — clear any pause/override and enforce immediately.
-- **Manual flip** — when Dark appearance is selected, a manual appearance change
-  pauses all scheduled effects until the next boundary. In Night Shift-only mode,
-  Light or Dark appearance is never treated as a divergence.
+- **Start nighttime now** (or **daytime**) brings the next scheduled mode forward.
+- **Resume schedule** clears the current override and enforces the schedule immediately.
+- When Dark appearance is selected, a manual appearance change holds all scheduled
+  effects until the next boundary. The same **Resume schedule** button ends that
+  hold early. In Night Shift-only mode, Light or Dark appearance is never treated
+  as a divergence.
 
 The current override and when it ends are shown in the popover; the state
 persists across relaunch.
 
 ### Switch early
 
-Tap **Start nighttime effects now** (or **daytime effects**) to bring the next
+Tap **Start nighttime now** (or **daytime**) to bring the next
 phase forward. Only selected effects change; a Night Shift-only early switch
-does not touch appearance or request Automation permission. **Back to schedule**
+does not touch appearance or request Automation permission. **Resume schedule**
 undoes it, and no transition notification is posted for an early switch.
 
 ### Launch at login
@@ -201,46 +220,50 @@ macOS release could rename or remove it. If that happens, the toggle will simply
 show as unavailable rather than misbehaving. Verified working on macOS 15; the
 warm color temperature follows the same day/night phase.
 
----
-
 ## Distribution (signed & notarized release)
 
-`release.sh` produces the shippable artifact: a **Developer ID-signed,
-Hardened-Runtime, Apple-notarized, stapled** `DarkModeScheduler.app` packaged in
-a **drag-to-Applications DMG**. This is what lets a user download it and open it
-without Gatekeeper warnings.
+`release.sh` produces three shippable artifacts: **Developer ID-signed,
+Hardened-Runtime, Apple-notarized, stapled** Intel, Apple Silicon, and Universal
+apps, each packaged in a **drag-to-Applications DMG**. This is what lets a user
+download one and open it without Gatekeeper warnings.
 
 ```bash
-./release.sh
+make release
 ```
+
+The first run needs a one-time keychain credential setup. See the complete,
+step-by-step [release runbook](Docs/RELEASING.md).
 
 ### What it does
 
 1. Auto-detects your **Developer ID Application** identity and Team ID.
-2. Builds the universal app and signs it with the **Hardened Runtime** and
+2. Builds Intel (`x86_64`), Apple Silicon (`arm64`), and Universal apps and signs
+   each with the **Hardened Runtime** and
    [`DarkModeScheduler.entitlements`](DarkModeScheduler.entitlements).
-3. **Notarizes the app** and staples the ticket (so it validates even offline).
+3. **Notarizes each app** and staples its ticket (so it validates even offline).
 4. Assembles a signed **DMG** with an `Applications` symlink for drag-install.
-5. **Notarizes the DMG** and staples it, then runs a Gatekeeper assessment.
+5. **Notarizes each DMG** and staples it, then runs a Gatekeeper assessment.
 
-Output: `dist/DarkModeScheduler.dmg` — ready to ship.
+Outputs, ready to ship:
 
-### One-time prerequisites
+- `dist/DarkModeScheduler-Intel.dmg`
+- `dist/DarkModeScheduler-Apple-Silicon.dmg`
+- `dist/DarkModeScheduler-Universal.dmg`
 
-- An **Apple Developer Program** membership and a **Developer ID Application**
-  certificate installed in your keychain (create it under
-  *developer.apple.com → Certificates*, then double-click to install).
-- **Notarization credentials**, stored once as a `notarytool` keychain profile
-  using an [app-specific password](https://support.apple.com/102654):
+To produce only a subset, set `RELEASE_ARCHS` to a space-separated list of
+`x86_64`, `arm64`, and/or `universal`.
 
-  ```bash
-  xcrun notarytool store-credentials "DarkModeScheduler" \
-      --apple-id "you@example.com" --team-id "TF2BG2VDPD" \
-      --password "abcd-efgh-ijkl-mnop"      # app-specific password
-  ```
+Existing release DMGs are preserved until every requested replacement finishes.
+A failed build or notarization therefore cannot overwrite the last known-good
+release set. Successful runs also create `dist/SHA256SUMS.txt`.
 
-  Then run: `NOTARY_PROFILE=DarkModeScheduler ./release.sh`
-  (or pass `APPLE_ID` + `NOTARY_PASSWORD` + `TEAM_ID` in the environment).
+### Signing prerequisites
+
+Releases reuse team `TF2BG2VDPD`'s installed Developer ID identity and the
+team-wide `StayLevel` notarytool keychain profile. Do not create replacement
+project credentials. Run Project Publisher's doctor command if either shared
+prerequisite is unavailable, then release through Project Publisher as described
+in [`Docs/RELEASING.md`](Docs/RELEASING.md).
 
 ### Hardened Runtime entitlements
 
@@ -252,16 +275,17 @@ keeps **library validation on** — the private CoreBrightness framework it
 `dlopen`s for Night Shift is Apple-signed, so no `disable-library-validation` is
 needed.
 
-### Graceful degradation
+### Failure behavior and local-test builds
 
-`release.sh` still works without full setup, and tells you exactly what's
-missing:
+Production releases fail during preflight, before compiling, if signing or
+notarization is not configured correctly:
 
 - **No Developer ID certificate** → it stops with instructions to obtain one.
-- **No notarization credentials** (or `SKIP_NOTARIZE=1`) → it builds a
-  Developer ID-signed **but un-notarized** DMG for local testing and prints the
-  one-time credential-setup command. Such a DMG works on your own machine but
-  would show a Gatekeeper warning on someone else's until it is notarized.
+- **No/invalid notarization credentials** → it stops with the one-time setup
+  command; it never emits a production-named unnotarized DMG.
+- **Explicit `make release-local`** → builds Developer ID-signed but
+  **unnotarized** local-test DMGs with `-Unnotarized` in every filename. These
+  are not for distribution and may trigger Gatekeeper on another Mac.
 
 ---
 
@@ -317,13 +341,15 @@ Darkmode scheduler/
 │                            #   Scheduler, Override, EnforcementEngine.
 ├── SunCalculator.swift      # Pure NOAA sunrise/sunset math (shared with tests).
 ├── SunCalculatorTests.swift # Standalone, GUI-free unit tests (@main runner).
-├── build.sh                 # Compile + bundle + Info.plist + codesign (ad-hoc
-│                            #   by default; env-overridable for release signing).
+├── build.sh                 # Compile + bundle + Info.plist + Developer ID
+│                            #   signing; ad-hoc output is prohibited.
+├── Makefile                 # Short commands for tests, builds, and releases.
 ├── release.sh               # Developer ID + Hardened Runtime + notarize +
 │                            #   staple → drag-to-Applications DMG.
+├── Docs/RELEASING.md        # One-time setup and repeatable release checklist.
 ├── DarkModeScheduler.entitlements  # Hardened Runtime entitlements (automation).
 ├── run-tests.sh             # Compile + run the unit tests.
 ├── README.md                # This file.
 ├── DarkModeScheduler.app    # Build output (created by build.sh).
-└── dist/DarkModeScheduler.dmg      # Release output (created by release.sh).
+└── dist/                            # Intel, Apple Silicon, and Universal DMGs.
 ```

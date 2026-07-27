@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for every Mac App Store app. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Postal-code geocoding uses one outbound HTTPS request. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Optional "My Location" support. -->
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+
+    <!--
+      Dark/Light switching uses System Events' public AppleScript interface.
+      Hardened Runtime permits the consent prompt; App Sandbox additionally
+      requires the narrowly scoped System Events temporary exception.
+      Explain and assess this entitlement in App Store Connect review notes.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.temporary-exception.apple-events</key>
+    <array>
+        <string>com.apple.systemevents</string>
+    </array>
+</dict>
+</plist>
