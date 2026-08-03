@@ -386,19 +386,19 @@ final class CoreBrightnessNightShift: NightShiftControlling {
     ) -> ObjCBool
     private typealias SupportedIMP = @convention(c) (AnyObject, Selector) -> ObjCBool
 
-    private struct BlueLightTime {
+    struct BlueLightTime {
         var hour: Int32 = 0
         var minute: Int32 = 0
     }
 
-    private struct BlueLightSchedule {
+    struct BlueLightSchedule {
         var from = BlueLightTime()
         var to = BlueLightTime()
     }
 
     /// Layout encoded by `getBlueLightStatus:` on supported CoreBrightness
     /// versions. The selector and every call remain runtime-guarded.
-    private struct BlueLightStatus {
+    struct BlueLightStatus {
         var active: Int8 = 0
         var enabled: Int8 = 0
         var scheduleAllowed: Int8 = 0
@@ -406,6 +406,10 @@ final class CoreBrightnessNightShift: NightShiftControlling {
         var schedule = BlueLightSchedule()
         var disableFlags: UInt64 = 0
         var available: Int8 = 0
+
+        /// `active` describes the CoreBrightness service, while `enabled`
+        /// reflects whether Night Shift warmth is actually applied.
+        var isEnabled: Bool { enabled != 0 }
     }
 
     private let client: NSObject?
@@ -467,7 +471,7 @@ final class CoreBrightnessNightShift: NightShiftControlling {
             Log.nightshift.info("getBlueLightStatus: failed")
             return nil
         }
-        return status.active != 0
+        return status.isEnabled
     }
 
     @discardableResult

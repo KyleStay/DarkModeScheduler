@@ -35,3 +35,12 @@ echo "==> Verifying distribution-channel policy…"
     -o "$BUILD_DIR/AppStoreVariantContractTests" \
     VariantContractTests.swift DistributionChannel.swift
 "$BUILD_DIR/AppStoreVariantContractTests"
+
+echo
+echo "==> Verifying CoreBrightness Night Shift status mapping…"
+/usr/bin/swiftc -O \
+    -module-cache-path "$BUILD_DIR/module-cache" \
+    -target "$(uname -m)-apple-macos13.0" \
+    -o "$BUILD_DIR/NightShiftAdapterTests" \
+    NightShiftAdapterTests.swift Services.swift Support.swift Scheduler.swift SunCalculator.swift
+"$BUILD_DIR/NightShiftAdapterTests"
