@@ -1,13 +1,19 @@
 NOTARY_PROFILE ?= StayLevel
 
-.PHONY: test verify verify-variants build-full build-app-store \
+.PHONY: test verify verify-background check-background-test-safety verify-variants build-full build-app-store \
 	build-intel build-apple-silicon build-universal \
 	release release-intel release-apple-silicon release-universal release-local
 
 test:
 	./run-tests.sh
 
-verify: test build-universal verify-variants
+verify: test build-universal verify-variants verify-background
+
+verify-background: check-background-test-safety
+	Tools/verify-background.sh
+
+check-background-test-safety:
+	Tools/check-background-test-safety.sh
 
 verify-variants:
 	Tools/verify-variants.sh

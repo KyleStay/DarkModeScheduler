@@ -24,8 +24,8 @@ printf '%s' "$entitlements" \
     | plutil -extract 'com\.apple\.security\.personal-information\.location' raw - \
     | grep -qx true
 
-if strings "$binary" | grep -Eq \
-    'CoreBrightness|CBBlueLightClient|getBlueLightStatus:|setEnabled:'; then
+if strings "$binary" | grep -E \
+    'CoreBrightness|CBBlueLightClient|getBlueLightStatus:|setEnabled:' >/dev/null; then
     echo "✗ App Store binary contains a private Night Shift implementation." >&2
     exit 1
 fi

@@ -50,6 +50,39 @@ Preserve unrelated dirty work. Read the README, build scripts, tests, and nearby
 documentation before changing behavior. Run the smallest useful project test
 and architecture build after code or packaging changes.
 
+## Background-safe verification
+
+Default verification must not activate apps, order visible/key/main windows,
+post global CGEvents, install a real `NSStatusItem`/`MenuBarExtra`, request TCC
+permissions, mutate login items/system defaults/other apps, or touch real user
+data. The fixture process and tests do not use the network; the required
+Developer ID build may contact Apple's timestamp service under the signing
+policy above. Run:
+
+```bash
+make verify-background
+make verify
+```
+
+The background lane runs `Tools/check-background-test-safety.sh`, builds the
+signed packaged fixture, and invokes `--background-fixture`. It uses isolated
+defaults, synthetic location/schedule fixtures, fake appearance/Night Shift
+adapters, and offscreen rendering of the real `PopoverView`; it writes JSON and
+PNG artifacts under `.build/background-verification/`. It must never change
+real Night Shift or dark-mode state.
+
+`--selftest` is pure and is allowed in default verification. The old live
+appearance check is opt-in only:
+
+```bash
+./DarkModeScheduler.app/Contents/MacOS/DarkModeScheduler --interactive-selftest
+```
+
+That interactive lane is excluded from `make verify` and remains the place for
+real menu-bar/WindowServer, Automation, Location Services, Launch at Login,
+notifications, and CoreBrightness QA. See `Docs/VERIFICATION.md` for exact
+boundaries and the remaining manual checklist.
+
 ## Shared Full and App Store product
 
 Maintain one shared Swift source tree for both channels. Read

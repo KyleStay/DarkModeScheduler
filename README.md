@@ -305,30 +305,64 @@ migration defaults, manual divergence, pause/resume/expiry, switch-early, wake
 reconciliation, Night Shift unavailability/failure retry, and idempotency. It
 also compiles `Support.swift` to test the isolated settings migration.
 
-### Hidden self-test (`--selftest`)
+### Background-safe verification
+
+```bash
+make verify-background
+```
+
+This is the default packaged UI verification lane and is safe to run without
+activating the app or changing user/system state. It runs the static
+focus-safety boundary check, builds a signed fixture app, and invokes:
+
+```bash
+./.build/background-fixture-product/DarkModeScheduler.app/Contents/MacOS/DarkModeScheduler \
+  --background-fixture --output .build/background-verification
+```
+
+The fixture never activates an app, creates a menu-bar item, orders a window,
+posts global events, requests TCC permissions, changes login items or system
+defaults, or calls live appearance/Night Shift adapters. The required signed
+build may contact Apple's timestamp service; this is build infrastructure, not
+the fixture process and is not a claim of offline operation.
+It uses synthetic location/schedule data, an isolated UserDefaults suite, and
+in-memory adapters, then renders the real `PopoverView` offscreen into
+`.build/background-verification/active-night.png` and `paused-day.png` plus
+`report.json`. These artifacts are local verification output, not user data.
+
+`make verify` includes `make verify-background` after the pure tests, universal
+Full build, and distribution-variant checks.
+
+### Pure self-test (`--selftest`)
 
 ```bash
 ./DarkModeScheduler.app/Contents/MacOS/DarkModeScheduler --selftest
 ```
 
-Runs two kinds of checks without launching the GUI:
+Runs only the scheduling and state-machine checks without launching the GUI or
+touching live system state: offsets, fixed-mode boundaries, next-transition,
+override expiry, and the divergence/suspend/enforce decisions.
 
-- **Pure** (no permissions): the scheduling & state-machine logic — offsets,
-  fixed-mode boundaries, next-transition, override expiry, and the
-  divergence/suspend/enforce decisions.
-- **Live** (needs Automation permission): forces a real switch and verifies the
-  live `AppleInterfaceStyle` changed, confirms idempotency (no AppleScript when
-  already at the desired mode), and restores the original appearance.
+### Opt-in interactive self-test (`--interactive-selftest`)
 
-If Automation permission hasn't been granted, it reports the `-1743` condition
-and what to click — it cannot complete the live half headlessly until a human
-grants that permission once. Exits 0 on success.
+```bash
+./DarkModeScheduler.app/Contents/MacOS/DarkModeScheduler --interactive-selftest
+```
+
+This is intentionally excluded from `make verify`. It forces a real appearance
+switch through System Events, verifies the live `AppleInterfaceStyle`, checks
+idempotency, and restores the original appearance. It requires Automation
+permission and a human-controlled interactive session; run it only when live
+WindowServer, permission, and system-state behavior is explicitly in scope.
+
+See [`Docs/VERIFICATION.md`](Docs/VERIFICATION.md) for the full lane boundary
+and the remaining manual/live QA checklist.
 
 ## File tree
 
 ```
 Darkmode scheduler/
-├── main.swift               # SwiftUI App/Scene, --selftest, entry dispatch.
+├── main.swift               # SwiftUI App/Scene, verification lanes, dispatch.
 ├── AppModel.swift           # @MainActor orchestrator: timer, wake, tick,
 │                            #   applies EnforcementEngine decisions, persistence.
 ├── PopoverView.swift        # The MenuBarExtra popover UI (all 9 features).
@@ -341,6 +375,7 @@ Darkmode scheduler/
 │                            #   Scheduler, Override, EnforcementEngine.
 ├── SunCalculator.swift      # Pure NOAA sunrise/sunset math (shared with tests).
 ├── SunCalculatorTests.swift # Standalone, GUI-free unit tests (@main runner).
+├── BackgroundVerification.swift # Isolated offscreen SwiftUI fixture + JSON/PNGs.
 ├── build.sh                 # Compile + bundle + Info.plist + Developer ID
 │                            #   signing; ad-hoc output is prohibited.
 ├── Makefile                 # Short commands for tests, builds, and releases.
@@ -349,6 +384,9 @@ Darkmode scheduler/
 ├── Docs/RELEASING.md        # One-time setup and repeatable release checklist.
 ├── DarkModeScheduler.entitlements  # Hardened Runtime entitlements (automation).
 ├── run-tests.sh             # Compile + run the unit tests.
+├── Tools/check-background-test-safety.sh # Static focus/side-effect boundary.
+├── Tools/verify-background.sh # Packaged background-safe fixture verification.
+├── Docs/VERIFICATION.md     # Safe/default and opt-in interactive QA contracts.
 ├── README.md                # This file.
 ├── DarkModeScheduler.app    # Build output (created by build.sh).
 └── dist/                            # Intel, Apple Silicon, and Universal DMGs.

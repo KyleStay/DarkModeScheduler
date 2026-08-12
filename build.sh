@@ -26,13 +26,13 @@ DISTRIBUTION_CHANNEL="${DISTRIBUTION_CHANNEL:-full}"
 
 case "$DISTRIBUTION_CHANNEL" in
     full)
-        BUILD_DIR=".build/full-intermediates"
+        BUILD_DIR="${BUILD_INTERMEDIATES_DIR:-.build/full-intermediates}"
         APP_OUTPUT_DIR="${APP_OUTPUT_DIR:-.}"
         SWIFT_CHANNEL_FLAGS=(-D FULL)
         DEFAULT_ENTITLEMENTS="DarkModeScheduler.entitlements"
         ;;
     app-store)
-        BUILD_DIR=".build/app-store-intermediates"
+        BUILD_DIR="${BUILD_INTERMEDIATES_DIR:-.build/app-store-intermediates}"
         APP_OUTPUT_DIR="${APP_OUTPUT_DIR:-.build/app-store-product}"
         SWIFT_CHANNEL_FLAGS=(-D APP_STORE)
         DEFAULT_ENTITLEMENTS="DarkModeScheduler-AppStore.entitlements"
@@ -65,6 +65,7 @@ SOURCES=(
     Scheduler.swift
     SunCalculator.swift
     DistributionChannel.swift
+    BackgroundVerification.swift
 )
 
 case "$BUILD_ARCH" in

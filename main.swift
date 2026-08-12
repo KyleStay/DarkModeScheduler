@@ -31,23 +31,24 @@ struct DarkModeSchedulerApp: App {
 
 // MARK: - Self test (hidden `--selftest` CLI path; not on the user path)
 
-/// Command-line self-test used by build/CI verification. It runs two kinds of
-/// checks, all without launching the GUI:
-///   • PURE (no permissions): the scheduling & state-machine logic — offsets,
-///     fixed-mode boundaries, next-transition, override expiry, and the manual
-///     divergence / suspend / enforce decisions.
-///   • LIVE (needs Automation permission): forces a real appearance switch,
-///     verifies it, confirms idempotency, and restores. If permission hasn't
-///     been granted it reports the -1743 condition instead of crashing.
-/// Exits 0 on success, non-zero on unexpected failure.
+/// Command-line self-test used by build/CI verification. The default path is
+/// pure and does not launch the GUI or touch live system state. The old live
+/// appearance checks remain available only through `--interactive-selftest`.
 enum SelfTest {
     static func run() -> Never {
         print("=== Dark Mode Scheduler self-test ===")
-        var failures = 0
-        failures += runPureChecks()
-        failures += runLiveChecks()
+        let failures = runPureChecks()
         print(failures == 0 ? "\n[selftest] ALL SELF-TESTS PASSED ✅"
                             : "\n[selftest] \(failures) SELF-TEST(S) FAILED ❌")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    static func runInteractive() -> Never {
+        print("=== Dark Mode Scheduler interactive self-test ===")
+        var failures = runPureChecks()
+        failures += runLiveChecks()
+        print(failures == 0 ? "\n[interactive-selftest] ALL SELF-TESTS PASSED ✅"
+                            : "\n[interactive-selftest] \(failures) SELF-TEST(S) FAILED ❌")
         exit(failures == 0 ? 0 : 1)
     }
 
@@ -217,9 +218,22 @@ enum SelfTest {
 
 // MARK: - Entry point
 //
-// main.swift permits top-level code. We intercept `--selftest` before starting
-// the SwiftUI app so the pure and live checks are scriptable without any GUI.
+// main.swift permits top-level code. We intercept verification arguments before
+// starting the SwiftUI app so safe and interactive checks remain explicit.
 
+if CommandLine.arguments.contains("--background-fixture") {
+    let outputPath: String?
+    if let outputIndex = CommandLine.arguments.firstIndex(of: "--output"),
+       CommandLine.arguments.indices.contains(outputIndex + 1) {
+        outputPath = CommandLine.arguments[outputIndex + 1]
+    } else {
+        outputPath = nil
+    }
+    BackgroundVerification.run(outputPath: outputPath)
+}
+if CommandLine.arguments.contains("--interactive-selftest") {
+    SelfTest.runInteractive()
+}
 if CommandLine.arguments.contains("--selftest") {
     SelfTest.run()  // never returns
 }

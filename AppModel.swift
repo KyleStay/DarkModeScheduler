@@ -105,16 +105,16 @@ final class AppModel: ObservableObject {
     var isEarlySwitch: Bool { override?.reason == .earlySwitch }
 
     // MARK: Collaborators
-    private let settings = SettingsStore()
-    private let geocoder = GeocodeService()
-    private let appearance = AppearanceController()
-    private let notifications = NotificationService()
-    private let nightShift: NightShiftControlling = makeNightShiftController()
-    let locationService = LocationService()
+    private let settings: SettingsStore
+    private let geocoder: GeocodeService
+    private let appearance: AppearanceControlling
+    private let notifications: NotificationService
+    private let nightShift: NightShiftControlling
+    let locationService: LocationService
+    private let timeZoneOverride: TimeZone?
     /// Read live (not captured once at launch) so scheduling follows the
     /// device's current time zone even if it changes while the app is running.
-    private var timeZone: TimeZone { .current }
-
+    private var timeZone: TimeZone { timeZoneOverride ?? .current }
     private var timer: Timer?              // 60s safety-net poll
     private var transitionTimer: Timer?    // one-shot, fires right at the next boundary
     private var wakeObserver: NSObjectProtocol?
@@ -129,6 +129,14 @@ final class AppModel: ObservableObject {
     private var pendingNightShiftDeactivation = false
 
     init() {
+        settings = SettingsStore()
+        geocoder = GeocodeService()
+        appearance = AppearanceController()
+        notifications = NotificationService()
+        nightShift = makeNightShiftController()
+        locationService = LocationService()
+        timeZoneOverride = nil
+
         // Load persisted settings into published mirrors.
         location = settings.location
         scheduleMode = settings.scheduleMode
@@ -168,6 +176,44 @@ final class AppModel: ObservableObject {
         observeWake()
         observeTimeChanges()
         tick()  // evaluate & enforce immediately on launch
+    }
+
+    /// Build a deterministic model for the nonactivating offscreen fixture.
+    /// This path uses an isolated defaults suite and in-memory adapters, and
+    /// deliberately does not start timers, install observers, read live state,
+    /// request permissions, or evaluate the live scheduler.
+    init(backgroundFixture fixture: BackgroundFixtureConfiguration) {
+        settings = SettingsStore(defaults: fixture.defaults)
+        geocoder = GeocodeService()
+        appearance = BackgroundAppearanceController(mode: fixture.currentMode)
+        notifications = NotificationService()
+        nightShift = BackgroundNightShiftController(active: fixture.nightShiftActive)
+        locationService = LocationService(backgroundOnly: true)
+        timeZoneOverride = fixture.timeZone
+
+        location = fixture.location
+        zipInput = fixture.location.zip
+        countryInput = fixture.location.country
+        locationSource = .zip
+        scheduleMode = fixture.scheduleMode
+        fixedNighttimeMinutes = fixture.fixedNighttimeMinutes
+        fixedDaytimeMinutes = fixture.fixedDaytimeMinutes
+        nighttimeOffsetMinutes = 0
+        daytimeOffsetMinutes = 0
+        scheduledPhase = fixture.scheduledPhase
+        currentMode = fixture.currentMode
+        nextTransition = fixture.nextTransition
+        override = fixture.override
+        darkAppearanceEnabled = fixture.darkAppearanceEnabled
+        nightShiftEnabled = fixture.nightShiftEnabled
+        nightShiftAvailable = fixture.nightShiftAvailable
+        notificationsEnabled = false
+        permissionBlocked = fixture.permissionBlocked
+        locationAuthStatus = .denied
+        launchAtLogin = false
+        glanceText = fixture.glanceText
+        lastAppearanceBaseline = fixture.currentMode
+        lastNightShiftActive = fixture.nightShiftActive
     }
 
     deinit {
