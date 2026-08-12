@@ -28,9 +28,17 @@ enum EnforceOutcome: Equatable {
     case failed(Int)                 // other AppleScript error (osastatus code)
 }
 
+/// System-appearance boundary used by the live app and the background fixture.
+/// Keeping the adapter behind a protocol lets the fixture exercise AppModel and
+/// the real SwiftUI view without reading or changing the user's appearance.
+protocol AppearanceControlling {
+    func currentMode() -> AppearanceMode
+    @discardableResult func enforce(desired: AppearanceMode) -> EnforceOutcome
+}
+
 /// Reads the live system appearance and applies changes idempotently via
 /// AppleScript to System Events (the only method that live-updates the UI).
-struct AppearanceController {
+struct AppearanceController: AppearanceControlling {
 
     /// The current live appearance, read from the global-domain preference that
     /// macOS keeps in sync (`AppleInterfaceStyle` == "Dark" when Dark).
@@ -78,6 +86,25 @@ struct AppearanceController {
             return .failed(code)
         }
         Log.appearance.info("Applied \(desired.label, privacy: .public)")
+        return .applied(desired)
+    }
+}
+
+/// Deterministic, in-memory appearance adapter for offscreen verification.
+/// It intentionally has no AppKit preference or AppleScript access.
+final class BackgroundAppearanceController: AppearanceControlling {
+    private(set) var mode: AppearanceMode
+
+    init(mode: AppearanceMode) {
+        self.mode = mode
+    }
+
+    func currentMode() -> AppearanceMode { mode }
+
+    @discardableResult
+    func enforce(desired: AppearanceMode) -> EnforceOutcome {
+        guard mode != desired else { return .unchanged(desired) }
+        mode = desired
         return .applied(desired)
     }
 }
@@ -202,14 +229,27 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     /// prompt OR later in System Settings). The owner decides whether to fetch.
     var onAuthorizationGranted: (() -> Void)?
 
-    private let manager = CLLocationManager()
-    private let geocoder = CLGeocoder()
+    private let manager: CLLocationManager?
+    private let geocoder: CLGeocoder?
 
     override init() {
+        let manager = CLLocationManager()
+        self.manager = manager
+        geocoder = CLGeocoder()
         authorizationStatus = manager.authorizationStatus
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyKilometer
+    }
+
+    /// Fixture-only initializer. It avoids even constructing a CoreLocation
+    /// manager, so offscreen rendering cannot read device authorization state.
+    init(backgroundOnly: Bool) {
+        precondition(backgroundOnly)
+        manager = nil
+        geocoder = nil
+        authorizationStatus = .denied
+        super.init()
     }
 
     /// Any granted variant (Always / WhenInUse / the deprecated `.authorized`).
@@ -228,6 +268,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     /// authorization is not yet determined this triggers the prompt; the actual
     /// fetch then happens via `onAuthorizationGranted` once the user responds.
     func requestLocation() {
+        guard let manager else { return }
         switch authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
@@ -259,6 +300,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
+        guard let geocoder else { return }
         Log.location.info("Got fix: \(loc.coordinate.latitude), \(loc.coordinate.longitude)")
         geocoder.reverseGeocodeLocation(loc) { [weak self] placemarks, error in
             guard let self else { return }
@@ -361,6 +403,23 @@ struct UnavailableNightShift: NightShiftControlling {
     let isAvailable = false
     var activeState: Bool? { nil }
     func setActive(_ active: Bool) -> Bool { false }
+}
+
+/// Deterministic, in-memory Night Shift adapter for the offscreen fixture.
+/// It never loads CoreBrightness or changes the system warmth setting.
+final class BackgroundNightShiftController: NightShiftControlling {
+    let isAvailable = true
+    private(set) var activeState: Bool?
+
+    init(active: Bool) {
+        activeState = active
+    }
+
+    @discardableResult
+    func setActive(_ active: Bool) -> Bool {
+        activeState = active
+        return true
+    }
 }
 
 func makeNightShiftController() -> NightShiftControlling {

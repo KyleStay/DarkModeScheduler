@@ -11,11 +11,14 @@ full_app="$full_output/DarkModeScheduler.app"
 full_binary="$full_app/Contents/MacOS/DarkModeScheduler"
 
 APP_OUTPUT_DIR="$full_output" \
+BUILD_INTERMEDIATES_DIR=".build/full-variant-intermediates" \
 BUILD_ARCH="$native_arch" \
 CODESIGN_ENTITLEMENTS="DarkModeScheduler.entitlements" \
     ./build.sh
 
-if ! strings "$full_binary" | grep -q 'CoreBrightness.framework'; then
+# Do not use grep -q here: with pipefail, an early grep exit can turn strings'
+# SIGPIPE into a false contract failure.
+if ! strings "$full_binary" | grep -F 'CoreBrightness.framework' >/dev/null; then
     echo "✗ Full binary unexpectedly omits Night Shift support." >&2
     exit 1
 fi
