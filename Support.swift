@@ -29,6 +29,28 @@ enum LocationSource: String, Equatable, Codable {
     var label: String { self == .coreLocation ? "My Location" : "Postal code" }
 }
 
+/// Identifies one in-flight postal lookup and the UI state that requested it.
+/// A response is accepted only while this exact request is still current.
+struct PostalLookupRequest: Equatable {
+    let id: UUID
+    let postalCode: String
+    let countryCode: String
+
+    init(id: UUID = UUID(), postalCode: String, countryCode: String) {
+        self.id = id
+        self.postalCode = postalCode
+        self.countryCode = countryCode
+    }
+
+    func matches(postalInput: String,
+                 countryInput: String,
+                 source: LocationSource) -> Bool {
+        source == .zip
+            && postalInput.trimmingCharacters(in: .whitespaces) == postalCode
+            && countryInput.trimmingCharacters(in: .whitespaces).uppercased() == countryCode
+    }
+}
+
 /// A resolved location cached in UserDefaults. Only re-fetched when the postal
 /// code (or country) changes, or when Location Services provides a new fix.
 ///

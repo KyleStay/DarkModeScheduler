@@ -1,140 +1,89 @@
 # Releasing Dark Mode Scheduler
 
-This runbook produces three distribution installers:
+Project Publisher is the only production release and installation route for the
+Full channel. It owns the shared Developer ID identity, `StayLevel` notarization
+profile, timestamped run folder, provenance manifest, checksums, bounded Apple
+service retries, and final artifact verification.
 
-| Installer | Executable architecture | Use when |
-|---|---|---|
-| `DarkModeScheduler-Intel.dmg` | `x86_64` | The destination is an Intel Mac |
-| `DarkModeScheduler-Apple-Silicon.dmg` | `arm64` | The destination is an M-series Mac |
-| `DarkModeScheduler-Universal.dmg` | `x86_64 arm64` | The destination architecture is unknown |
+The release contract produces these DMGs:
 
-Every production installer is Developer ID signed with Hardened Runtime,
-notarized by Apple, stapled for offline validation, checked by Gatekeeper, and
-listed in `dist/SHA256SUMS.txt`.
+| Artifact | Executable architecture |
+|---|---|
+| `DarkModeScheduler-<version>-x86_64.dmg` | Intel |
+| `DarkModeScheduler-<version>-arm64.dmg` | Apple silicon |
+| `DarkModeScheduler-<version>-universal.dmg` | Intel and Apple silicon |
 
-## Shared signing environment
+The App Store channel has a separate local verification path. Do not add App
+Store packages or uploads to Project Publisher.
 
-Project Publisher owns the release credentials for team `TF2BG2VDPD`:
+## Prepare and verify
 
-- `Developer ID Application: Kyle Stay (TF2BG2VDPD)`
-- notarytool keychain profile `StayLevel`
+1. Update `VERSION` and `BUILD_NUMBER` near the top of `build.sh` when preparing
+   a new version.
+2. Review the branch and working tree. Dirty source is supported and recorded in
+   the release manifest, but the checkout must remain unchanged for the complete
+   release run.
+3. Run the repository verification gate:
 
-Do not create replacement credentials for this project. Diagnose the shared
-environment from `/Users/kyle/Documents/Project Publisher`:
+   ```bash
+   make verify-background
+   make verify
+   ```
 
-```sh
+## Audit the release contract
+
+Run these commands from Project Publisher:
+
+```bash
+cd "/Users/kyle/Documents/Project Publisher"
+make audit
+swift run project-publisher audit --project darkmode-scheduler
 swift run project-publisher doctor
 ```
 
-## Production release
+`doctor` checks the team `TF2BG2VDPD` Developer ID identities and the existing
+`StayLevel` notarytool profile. Do not create replacement project credentials.
 
-### 1. Prepare the version
+## Produce the distribution matrix
 
-1. Update `VERSION` and `BUILD_NUMBER` near the top of `build.sh`.
-2. Ensure the build number is greater than the previous distributed build.
-3. Review the current branch and working tree so the intended source is being
-   released.
-
-### 2. Run verification
+From Project Publisher, run:
 
 ```bash
-make verify
+swift run -c release project-publisher release --project darkmode-scheduler
 ```
 
-This runs the pure test suite and verifies that a Universal app can be built
-with both CPU slices.
+Project Publisher builds the three declared architectures through
+`Scripts/project-publisher-release.sh`, notarizes and staples the apps and DMGs,
+checks Gatekeeper acceptance, runs `Scripts/project-publisher-verify.sh`, and
+writes one timestamped run beneath its `Releases/` directory.
 
-### 3. Produce all installers
+Success requires all three DMGs plus `manifest.json`, `checksums.txt`, and logs.
+The command remains local-only: it does not create tags, upload artifacts, or
+publish a GitHub release.
+
+## Install a verified build
+
+Install only through Project Publisher. For a fresh host-native deployment:
 
 ```bash
-make release
+swift run -c release project-publisher install --project darkmode-scheduler --host-only
 ```
 
-The release script performs these checks automatically:
+For a complete release followed by installation, omit `--host-only`. To install
+an existing run without rebuilding, pass `--from-run <id>`. Project Publisher
+quits the running app, swaps the bundle atomically, and verifies the installed
+staple, Gatekeeper acceptance, checksum, and architecture.
 
-1. Confirms required macOS command-line tools and entitlements exist.
-2. Resolves the Developer ID identity and Team ID.
-3. Validates the saved notary profile before compiling anything.
-4. Builds and verifies the exact architecture for each app.
-5. Signs, notarizes, and staples each app.
-6. Creates, signs, verifies, notarizes, and staples each DMG.
-7. Requires Gatekeeper acceptance for both the app and DMG.
-8. Publishes all requested DMGs atomically, preserving the previous release if
-   any earlier step fails.
-9. Writes SHA-256 checksums to `dist/SHA256SUMS.txt`.
+Do not mount a DMG and copy the app into `/Applications` by hand.
 
-Notarization makes several Apple submissions and can take several minutes.
+## Failure handling
 
-### 4. Confirm the output
-
-```bash
-(cd dist && shasum -a 256 -c SHA256SUMS.txt)
-xcrun stapler validate dist/DarkModeScheduler-Intel.dmg
-xcrun stapler validate dist/DarkModeScheduler-Apple-Silicon.dmg
-xcrun stapler validate dist/DarkModeScheduler-Universal.dmg
-```
-
-Only DMGs without `-Unnotarized` in the filename are distribution candidates.
-
-### 5. Smoke-test on clean Macs
-
-Before broad distribution:
-
-1. Test the Intel installer on an Intel Mac, if one is available.
-2. Test the Apple Silicon installer on an M-series Mac.
-3. Open the DMG, drag the app to Applications, and launch it normally.
-4. Confirm there is no Gatekeeper warning.
-5. Confirm the menu-bar app launches and the first appearance switch presents
-   the expected Automation permission request.
-
-## Focused and local-test commands
-
-Produce one fully notarized architecture when needed:
-
-```bash
-make release-intel
-make release-apple-silicon
-make release-universal
-```
-
-Produce explicitly unnotarized local-test installers:
-
-```bash
-make release-local
-```
-
-Local-test filenames include `-Unnotarized` and must not be shared as normal
-downloads.
-
-To use a differently named notary profile:
-
-```bash
-make release NOTARY_PROFILE="AnotherProfile"
-```
-
-## Failure and recovery
-
-- Credential, certificate, tool, or architecture configuration errors stop in
-  preflight before the production build starts.
-- Temporary app archives, staging directories, and DMGs are removed on exit.
-- Production filenames are replaced only after every requested variant passes
-  signing, notarization, stapling, disk-image verification, and Gatekeeper.
-- A failed run therefore leaves the last complete production release intact.
-- If Apple rejects a submission, inspect it with:
-
-  ```bash
-  xcrun notarytool log SUBMISSION_ID \
-    --keychain-profile "StayLevel"
-  ```
-
-  Fix the reported signing or packaging issue and rerun `make release`.
-
-## Security notes
-
-- Never commit an Apple ID, app-specific password, exported certificate, API
-  key, or keychain file.
-- Prefer the keychain profile over environment variables because secrets do not
-  appear in shell history or process arguments.
-- Do not distribute `-Unnotarized` artifacts.
-- Share `SHA256SUMS.txt` alongside public downloads when recipients need an
-  integrity check.
+- Compiler, contract, signing-policy, provenance, and verification failures need
+  a source or environment fix. Do not bypass them with the retired standalone
+  release script.
+- Project Publisher retries only recognized transient Apple timestamp or
+  notarization network failures.
+- If Apple rejects a submission, inspect the reported submission through the
+  shared `StayLevel` profile, fix the cause, and start a fresh Publisher run.
+- Keep credentials out of the repository and command arguments. Never inspect,
+  print, copy, replace, or store the `StayLevel` secret.

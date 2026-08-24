@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Record — Git Environment Cleanup</title>
+<style>
+/* ============================================================================
+   plan.css — canonical design system for html_plan_generator
+   ----------------------------------------------------------------------------
+   SOURCE OF TRUTH. Do not hand-edit generated plans' styles.
+   When generating a plan, inline this block VERBATIM inside a <style> tag so the
+   file is self-contained (renders/shares anywhere, survives the Artifact CSP).
+   Keeping the inlined block byte-identical to this file is what keeps diffs clean
+   — Theo's "design-system reference file" tip, adapted for portable single files.
+   Bump VERSION when the tokens/components change.
+   ============================================================================ */
+/* VERSION: 1.2.0 */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1d2129;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --muted: #9aa3b2;
+  --accent: #7c9cff;
+  --accent-2: #5ee0c0;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code-bg: #0b0d11;
+  --radius: 14px;
+  --maxw: 900px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --border: #e2e5ea;
+    --text: #1a1d24; --muted: #5b6472; --code-bg: #f0f2f5;
+    --accent: #3355dd; --accent-2: #0e9e86;
+  }
+}
+/* Explicit theme override: a viewer's theme toggle (e.g. the Artifact host)
+   stamps data-theme on <html>. Attribute selectors beat the media query, so
+   these win in both directions regardless of OS preference. */
+:root[data-theme="light"] {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --border: #e2e5ea;
+  --text: #1a1d24; --muted: #5b6472; --code-bg: #f0f2f5;
+  --accent: #3355dd; --accent-2: #0e9e86;
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --panel: #171a21; --panel-2: #1d2129; --border: #2a2f3a;
+  --text: #e6e9ef; --muted: #9aa3b2; --code-bg: #0b0d11;
+  --accent: #7c9cff; --accent-2: #5ee0c0;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font); line-height: 1.6; font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden; /* belt-and-suspenders: page never scrolls sideways on mobile */
+}
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 40px 20px 96px; }
+
+/* Hero */
+header.hero {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--panel), var(--panel-2));
+  padding: 32px; margin-bottom: 32px;
+}
+.kicker { text-transform: uppercase; letter-spacing: .14em; font-size: 12px; color: var(--accent-2); font-weight: 700; margin: 0 0 10px; }
+h1 { font-size: clamp(26px, 5vw, 38px); line-height: 1.15; margin: 0 0 12px; letter-spacing: -0.02em; }
+.sub { color: var(--muted); font-size: 16px; margin: 0; max-width: 62ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.chip { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); padding: 5px 11px; border-radius: 999px; }
+.chip b { color: var(--text); font-weight: 600; }
+
+/* Sections */
+section { margin: 40px 0; }
+h2 { font-size: 22px; letter-spacing: -0.01em; margin: 0 0 4px; display: flex; align-items: center; gap: 12px; }
+h2 .num { font-family: var(--mono); font-size: 13px; color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px; background: var(--panel); }
+.lead { color: var(--muted); margin: 4px 0 20px; }
+
+/* Cards / text */
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin: 16px 0; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+a:hover { border-bottom-color: var(--accent); }
+blockquote { margin: 0; padding: 14px 18px; border-left: 3px solid var(--accent-2); background: var(--panel-2); border-radius: 0 10px 10px 0; color: var(--text); font-style: italic; }
+blockquote cite { display: block; font-style: normal; color: var(--muted); font-size: 13px; margin-top: 8px; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); }
+ul, ol { padding-left: 22px; }
+li { margin: 6px 0; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent-2); font-weight: 700; margin: 14px 0 6px; }
+.label:first-child { margin-top: 0; }
+.callout { border: 1px dashed var(--accent-2); border-radius: 12px; padding: 16px 18px; background: color-mix(in srgb, var(--accent-2) 6%, transparent); }
+.out { color: var(--muted); }
+
+/* Layout helpers */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* Side-by-side compare block (PR3) */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+.compare > div { padding: 16px 18px; }
+.compare > div + div { border-left: 1px solid var(--border); }
+@media (max-width: 640px) { .compare > div + div { border-left: none; border-top: 1px solid var(--border); } }
+.compare .col-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+.compare .before .col-head { color: var(--bad); }
+.compare .after .col-head { color: var(--good); }
+
+/* Flaws / severity table (PR3) */
+/* Wrap tables in .table-scroll so wide content scrolls inside its own box on
+   mobile instead of pushing the whole page sideways. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; }
+.flaws { width: 100%; min-width: 460px; border-collapse: collapse; overflow: hidden; border-radius: 10px; }
+.flaws th, .flaws td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 14.5px; }
+.flaws th { background: var(--panel-2); color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.flaws tr:last-child td { border-bottom: none; }
+.sev { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+.sev.high { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
+.sev.med  { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.sev.low  { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
+
+/* Architecture diagram frame (PR4) */
+.diagram { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 18px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* min-width keeps labels legible; if the phone is narrower the diagram scrolls
+   inside its own framed box rather than shrinking the text to nothing. */
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; min-width: 520px; height: auto; }
+.diagram .node { fill: var(--panel); stroke: var(--border); }
+.diagram .node-label { fill: var(--text); font-family: var(--font); font-size: 13px; }
+.diagram .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.diagram .edge-arrow { fill: var(--muted); }
+
+/* PR cards (PR2) */
+.pr { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); margin: 14px 0; overflow: hidden; }
+.pr-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.pr-tag { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--bg); background: var(--accent); padding: 4px 9px; border-radius: 7px; }
+.pr-title { font-weight: 650; font-size: 16px; }
+.pr-size { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.pr-body { padding: 16px 20px; }
+.pr-body ul { margin: 0; }
+
+/* Principles */
+.principle { display: flex; gap: 12px; align-items: flex-start; margin: 12px 0; }
+.principle .dot { color: var(--accent-2); font-weight: 800; margin-top: 1px; }
+
+/* Interactive scoping block (PR5) */
+.scoper { border: 1px solid var(--accent); border-radius: 12px; padding: 18px 20px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.scoper .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+.scoper label.opt { display: flex; align-items: center; gap: 8px; font-size: 14.5px; cursor: pointer; }
+.scoper input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+.scoper .rangeval { font-family: var(--mono); font-size: 13px; color: var(--accent-2); min-width: 3ch; text-align: right; }
+.scoper button {
+  font: inherit; font-weight: 650; font-size: 14px; cursor: pointer;
+  color: var(--bg); background: var(--accent); border: none;
+  padding: 9px 16px; border-radius: 9px; margin-top: 8px;
+}
+.scoper button:active { transform: translateY(1px); }
+.scoper .prompt-out {
+  font-family: var(--mono); font-size: 13px; white-space: pre-wrap;
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px; margin-top: 12px; color: var(--text);
+}
+.scoper .copied { color: var(--good); font-size: 13px; margin-left: 10px; }
+
+/* Footer */
+.foot { color: var(--muted); font-size: 13px; margin-top: 48px; border-top: 1px solid var(--border); padding-top: 20px; }
+
+/* Accessibility: visible keyboard focus + reduced-motion. Interactive controls
+   (links, the scoper's slider/checkboxes/button) get a clear focus ring, and
+   users who ask for reduced motion get no transitions/press animation. */
+a:focus-visible,
+.scoper button:focus-visible,
+.scoper input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .scoper button:active { transform: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Mobile hardening (<= 640px): tighter spacing, wrapping headers, bigger touch
+   targets. Column collapses (.grid2/.compare) are defined next to their rules.
+   --------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .wrap { padding: 24px 14px 72px; }
+  header.hero { padding: 22px; }
+  .card { padding: 18px; }
+  section { margin: 32px 0; }
+  h2 { font-size: 20px; }
+  .pr-head { flex-wrap: wrap; }
+  .pr-size { margin-left: 0; width: 100%; }        /* size chip drops to its own line */
+  .scoper button { width: 100%; padding: 12px 16px; }  /* full-width, thumb-friendly */
+  .scoper .copied { display: block; margin: 8px 0 0; }
+  blockquote { padding: 12px 14px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <p class="kicker">Repository Hygiene Record · DarkModeScheduler</p>
+  <h1>Git Environment Cleanup Record</h1>
+  <p class="sub">Historical snapshot of the local Git cleanup prepared on July 15, 2026. Counts and commit identifiers below describe that date, not the current repository.</p>
+  <div class="meta">
+    <span class="chip"><b>Owner:</b> Kyle</span>
+    <span class="chip"><b>Date:</b> 2026-07-15</span>
+    <span class="chip"><b>Status:</b> Archived snapshot</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="num">01</span> Archived Objective</h2>
+  <p class="lead">Preserve the evidence and proposed cleanup from the July 15 review.</p>
+  <div class="card">
+    <p>At the time of review, the worktree was clean, local <code>main</code> equaled GitHub <code>main</code> at <code>7e584d3</code>, and there were no local topic branches, stashes, or extra worktrees. GitHub exposed only <code>main</code>, while the checkout retained 14 deleted remote-tracking refs from merged feature and release pull requests.</p>
+    <div class="callout"><strong>Recorded recommendation:</strong> Prune only stale local tracking metadata, restore the remote default-branch pointer, and retain every tag and commit.</div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">02</span> Current State</h2>
+  <p class="lead">Evidence gathered from the checkout and GitHub on 2026-07-15.</p>
+
+  <div class="card">
+    <div class="label">Verified facts</div>
+    <ul>
+      <li><b>Worktree:</b> clean <code>main</code>; no ahead/behind count; one worktree only.</li>
+      <li><b>GitHub:</b> only <code>main</code> exists; no open pull requests; latest commit is <code>7e584d3</code>.</li>
+      <li><b>Stale local metadata:</b> <code>git remote prune origin --dry-run</code> reports 14 refs that would be pruned.</li>
+      <li><b>Ancestry:</b> all 14 stale refs are merged into <code>origin/main</code>; none are unmerged.</li>
+      <li><b>History to retain:</b> release tags <code>v1.0</code> and <code>v2.0</code>–<code>v2.7</code>.</li>
+      <li><b>Repository size:</b> 135 loose objects / 676 KiB; no garbage and no packs. Compaction has negligible value.</li>
+      <li><b>Config:</b> conventional <code>origin</code> fetch refspec and <code>main</code> tracking; automatic pruning is not enabled.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="pr-body"><div class="label" style="color:var(--bad)">Cleanup gaps</div></div>
+    <div class="table-scroll">
+      <table class="flaws">
+        <thead><tr><th>Gap</th><th>Why it matters</th><th>Severity</th></tr></thead>
+        <tbody>
+          <tr><td>14 stale <code>origin/*</code> refs</td><td>Branch listings imply deleted GitHub branches still exist and add noise to lane inventory.</td><td><span class="sev med">MED</span></td></tr>
+          <tr><td>Missing <code>origin/HEAD</code></td><td>Tools cannot resolve the remote's default branch through the conventional symbolic ref.</td><td><span class="sev low">LOW</span></td></tr>
+          <tr><td>No automatic remote pruning</td><td>Deleted GitHub branches will accumulate again after future fetches.</td><td><span class="sev low">LOW</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="compare">
+    <div class="before"><div class="col-head">Observed local view</div><p><code>origin/main</code> plus 14 already-deleted feature/release tracking refs; no <code>origin/HEAD</code>.</p></div>
+    <div class="after"><div class="col-head">Target local view</div><p><code>origin/HEAD → origin/main</code> and <code>origin/main</code> only, with tags untouched and pruning enabled for future fetches.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">03</span> Recorded Cleanup</h2>
+  <p class="lead">The proposed operation was a reversible metadata pass with no source or history changes.</p>
+  <div class="card">
+    <p>The plan called for a fresh dry-run immediately before cleanup, pruning deleted remote-tracking refs, asking Git to discover and record GitHub's default branch, and enabling per-repository pruning on future fetches. It then verified that <code>main</code> remained clean and synchronized and that release tags remained present.</p>
+
+    <div class="diagram" role="img" aria-label="Cleanup sequence from validation through pruning to verification">
+      <svg viewBox="0 0 640 140" width="640" height="140">
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="edge-arrow" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+        <g>
+          <rect class="node" x="16" y="45" width="150" height="50" rx="10"/>
+          <text class="node-label" x="91" y="75" text-anchor="middle">Revalidate</text>
+          <rect class="node" x="245" y="45" width="150" height="50" rx="10"/>
+          <text class="node-label" x="320" y="75" text-anchor="middle">Prune metadata</text>
+          <rect class="node" x="474" y="45" width="150" height="50" rx="10"/>
+          <text class="node-label" x="549" y="75" text-anchor="middle">Verify invariants</text>
+          <line class="edge" x1="166" y1="70" x2="238" y2="70" marker-end="url(#arrow)"/>
+          <line class="edge" x1="395" y1="70" x2="467" y2="70" marker-end="url(#arrow)"/>
+        </g>
+      </svg>
+    </div>
+
+    <div class="label">Non-goals</div>
+    <ul class="out">
+      <li>Do not delete GitHub branches: GitHub already has only <code>main</code>.</li>
+      <li>Do not delete release tags, rewrite commits, reset <code>main</code>, clean build products, or remove reflogs.</li>
+      <li>Do not run aggressive garbage collection; the repository is tiny and reports no garbage.</li>
+      <li>This file began as a local planning artifact and is now retained as a dated historical record.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">04</span> Historical Procedure</h2>
+  <p class="lead">These were the planned steps and stop conditions for the July cleanup.</p>
+
+  <div class="pr">
+    <div class="pr-head"><span class="pr-tag">STEP 1</span><span class="pr-title">Revalidate before mutation</span><span class="pr-size">read-only</span></div>
+    <div class="pr-body">
+      <div class="label">Run</div>
+      <ul>
+        <li><code>git status --short --branch</code></li>
+        <li><code>git remote prune origin --dry-run</code></li>
+        <li><code>git for-each-ref --no-merged=refs/remotes/origin/main refs/remotes/origin</code></li>
+      </ul>
+      <div class="label">Stop if</div>
+      <ul class="out"><li>The worktree is dirty, <code>main</code> diverged, or any stale ref is not merged.</li></ul>
+    </div>
+  </div>
+
+  <div class="pr">
+    <div class="pr-head"><span class="pr-tag">STEP 2</span><span class="pr-title">Reconcile local remote metadata</span><span class="pr-size">small</span></div>
+    <div class="pr-body">
+      <div class="label">Run</div>
+      <ul>
+        <li><code>git remote prune origin</code> — removes only local <code>refs/remotes/origin/*</code> entries that GitHub has deleted.</li>
+        <li><code>git remote set-head origin --auto</code> — records <code>origin/HEAD → origin/main</code>.</li>
+        <li><code>git config remote.origin.prune true</code> — keeps this repository tidy on future fetches.</li>
+      </ul>
+      <div class="label">Out of scope</div>
+      <ul class="out"><li>No remote deletes, branch deletes, tag deletes, resets, cleans, or source-file edits.</li></ul>
+    </div>
+  </div>
+
+  <div class="pr">
+    <div class="pr-head"><span class="pr-tag">STEP 3</span><span class="pr-title">Verify the target state</span><span class="pr-size">read-only</span></div>
+    <div class="pr-body">
+      <div class="label">Expected results</div>
+      <ul>
+        <li><code>git status --short --branch</code> still reports clean <code>main...origin/main</code>.</li>
+        <li><code>git branch -r</code> shows only <code>origin/HEAD → origin/main</code> and <code>origin/main</code>.</li>
+        <li><code>git remote prune origin --dry-run</code> reports nothing to prune.</li>
+        <li><code>git tag --list</code> still reports all nine release tags.</li>
+        <li><code>git config --get remote.origin.prune</code> reports <code>true</code>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<p class="foot">Generated by the <code>html_plan_generator</code> skill and archived as a point-in-time repository record.</p>
+</div>
+</body>
+</html>

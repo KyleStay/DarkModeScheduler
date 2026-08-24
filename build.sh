@@ -89,6 +89,7 @@ compile_arch() {
     local out="$2"
     /usr/bin/swiftc -O \
         -warnings-as-errors \
+        -module-cache-path "${BUILD_DIR}/module-cache" \
         -target "${arch}-apple-macos${MIN_MACOS}" \
         "${SWIFT_CHANNEL_FLAGS[@]}" \
         -o "$out" \
