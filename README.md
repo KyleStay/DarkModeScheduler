@@ -46,9 +46,9 @@ Download the DMG for your Mac, double-click it, and **drag the app onto the
 Applications folder** shown in the window. Then launch it from Applications — a
 sun/moon icon appears in the menu bar; click it to open the popover.
 
-- **`DarkModeScheduler-Apple-Silicon.dmg`** — M1, M2, M3, M4, and newer Macs.
-- **`DarkModeScheduler-Intel.dmg`** — Intel-based Macs.
-- **`DarkModeScheduler-Universal.dmg`** — contains both architectures; use this
+- **`DarkModeScheduler-<version>-arm64.dmg`** — Apple silicon Macs.
+- **`DarkModeScheduler-<version>-x86_64.dmg`** — Intel-based Macs.
+- **`DarkModeScheduler-<version>-universal.dmg`** — contains both architectures; use this
   when the destination Mac is unknown.
 
 The release DMG is **signed with a Developer ID and notarized by Apple**, so
@@ -222,40 +222,38 @@ warm color temperature follows the same day/night phase.
 
 ## Distribution (signed & notarized release)
 
-`release.sh` produces three shippable artifacts: **Developer ID-signed,
-Hardened-Runtime, Apple-notarized, stapled** Intel, Apple Silicon, and Universal
-apps, each packaged in a **drag-to-Applications DMG**. This is what lets a user
-download one and open it without Gatekeeper warnings.
+Project Publisher is the only production release and installation route for the
+Full channel. It builds Developer ID-signed, Hardened Runtime, notarized, stapled
+Intel, Apple silicon, and universal DMGs, then records their source provenance,
+checksums, logs, and verification results in one timestamped run folder.
 
 ```bash
-make release
+cd "/Users/kyle/Documents/Project Publisher"
+swift run project-publisher audit --project darkmode-scheduler
+swift run project-publisher doctor
+swift run -c release project-publisher release --project darkmode-scheduler
 ```
 
-The first run needs a one-time keychain credential setup. See the complete,
-step-by-step [release runbook](Docs/RELEASING.md).
+The repository does not contain a second notarization pipeline. See the
+[release runbook](Docs/RELEASING.md) for the full audit, credential, release,
+and installation procedure.
 
 ### What it does
 
-1. Auto-detects your **Developer ID Application** identity and Team ID.
-2. Builds Intel (`x86_64`), Apple Silicon (`arm64`), and Universal apps and signs
-   each with the **Hardened Runtime** and
-   [`DarkModeScheduler.entitlements`](DarkModeScheduler.entitlements).
-3. **Notarizes each app** and staples its ticket (so it validates even offline).
-4. Assembles a signed **DMG** with an `Applications` symlink for drag-install.
-5. **Notarizes each DMG** and staples it, then runs a Gatekeeper assessment.
+1. Audits the registered `.project-publisher.json` contract and captures the
+   branch, commit, dirty state, and source inventory.
+2. Passes the exact declared architecture list and shared Developer ID identity
+   into the repository-owned build adapter.
+3. Notarizes, staples, and verifies each app and DMG, including Gatekeeper and
+   project-specific artifact checks.
+4. Writes the artifacts, `manifest.json`, `checksums.txt`, and logs beneath one
+   Project Publisher `Releases/<timestamp>/darkmode-scheduler/<version>/` folder.
 
 Outputs, ready to ship:
 
-- `dist/DarkModeScheduler-Intel.dmg`
-- `dist/DarkModeScheduler-Apple-Silicon.dmg`
-- `dist/DarkModeScheduler-Universal.dmg`
-
-To produce only a subset, set `RELEASE_ARCHS` to a space-separated list of
-`x86_64`, `arm64`, and/or `universal`.
-
-Existing release DMGs are preserved until every requested replacement finishes.
-A failed build or notarization therefore cannot overwrite the last known-good
-release set. Successful runs also create `dist/SHA256SUMS.txt`.
+- `DarkModeScheduler-<version>-x86_64.dmg`
+- `DarkModeScheduler-<version>-arm64.dmg`
+- `DarkModeScheduler-<version>-universal.dmg`
 
 ### Signing prerequisites
 
@@ -277,15 +275,11 @@ needed.
 
 ### Failure behavior and local-test builds
 
-Production releases fail during preflight, before compiling, if signing or
-notarization is not configured correctly:
-
-- **No Developer ID certificate** → it stops with instructions to obtain one.
-- **No/invalid notarization credentials** → it stops with the one-time setup
-  command; it never emits a production-named unnotarized DMG.
-- **Explicit `make release-local`** → builds Developer ID-signed but
-  **unnotarized** local-test DMGs with `-Unnotarized` in every filename. These
-  are not for distribution and may trigger Gatekeeper on another Mac.
+Production releases stop on credential, compiler, signing-policy, provenance,
+artifact-matrix, notarization, or verification failures. Project Publisher
+retries only recognized transient Apple-service failures. Ordinary `build.sh`
+products remain signed but unnotarized development builds; the repository no
+longer exposes a second DMG release path for them.
 
 ---
 
@@ -378,16 +372,13 @@ Darkmode scheduler/
 ├── BackgroundVerification.swift # Isolated offscreen SwiftUI fixture + JSON/PNGs.
 ├── build.sh                 # Compile + bundle + Info.plist + Developer ID
 │                            #   signing; ad-hoc output is prohibited.
-├── Makefile                 # Short commands for tests, builds, and releases.
-├── release.sh               # Developer ID + Hardened Runtime + notarize +
-│                            #   staple → drag-to-Applications DMG.
-├── Docs/RELEASING.md        # One-time setup and repeatable release checklist.
+├── Makefile                 # Background-safe tests and signed builds.
+├── Docs/RELEASING.md        # Project Publisher release/install checklist.
 ├── DarkModeScheduler.entitlements  # Hardened Runtime entitlements (automation).
 ├── run-tests.sh             # Compile + run the unit tests.
 ├── Tools/check-background-test-safety.sh # Static focus/side-effect boundary.
 ├── Tools/verify-background.sh # Packaged background-safe fixture verification.
 ├── Docs/VERIFICATION.md     # Safe/default and opt-in interactive QA contracts.
 ├── README.md                # This file.
-├── DarkModeScheduler.app    # Build output (created by build.sh).
-└── dist/                            # Intel, Apple Silicon, and Universal DMGs.
+└── DarkModeScheduler.app    # Build output (created by build.sh).
 ```

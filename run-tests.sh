@@ -13,6 +13,7 @@ TEST_BIN="$BUILD_DIR/SunCalculatorTests"
 
 echo "==> Compiling test suite (swiftc, warnings-as-info)…"
 /usr/bin/swiftc -O \
+    -module-cache-path "$BUILD_DIR/module-cache" \
     -target "$(uname -m)-apple-macos13.0" \
     -o "$TEST_BIN" \
     SunCalculatorTests.swift SunCalculator.swift Scheduler.swift Support.swift
@@ -24,6 +25,7 @@ echo
 echo
 echo "==> Verifying distribution-channel policy…"
 /usr/bin/swiftc -O \
+    -module-cache-path "$BUILD_DIR/module-cache" \
     -target "$(uname -m)-apple-macos13.0" \
     -o "$BUILD_DIR/FullVariantContractTests" \
     VariantContractTests.swift DistributionChannel.swift
@@ -31,6 +33,7 @@ echo "==> Verifying distribution-channel policy…"
 
 /usr/bin/swiftc -O \
     -D APP_STORE \
+    -module-cache-path "$BUILD_DIR/module-cache" \
     -target "$(uname -m)-apple-macos13.0" \
     -o "$BUILD_DIR/AppStoreVariantContractTests" \
     VariantContractTests.swift DistributionChannel.swift

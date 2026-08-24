@@ -127,6 +127,8 @@ final class AppModel: ObservableObject {
     private var lastNightShiftActive: Bool?
     private var nightShiftOwnedActive = false
     private var pendingNightShiftDeactivation = false
+    private var postalLookupRequest: PostalLookupRequest?
+    private var postalLookupTask: Task<Void, Never>?
 
     init() {
         settings = SettingsStore()
@@ -219,6 +221,7 @@ final class AppModel: ObservableObject {
     deinit {
         timer?.invalidate()
         transitionTimer?.invalidate()
+        postalLookupTask?.cancel()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -720,32 +723,73 @@ final class AppModel: ObservableObject {
         // No re-fetch when nothing changed.
         if let existing = location, existing.source == .zip,
            existing.zip == code, existing.country.uppercased() == cc {
+            cancelPostalLookup()
             geocodeError = nil
             tick()
             return
         }
 
+        cancelPostalLookup()
+        let request = PostalLookupRequest(postalCode: code, countryCode: cc)
+        let geocoder = geocoder
+        postalLookupRequest = request
         geocodeError = nil
         isResolving = true
-        Task {
-            defer { isResolving = false }
+        postalLookupTask = Task { [weak self] in
+            let result: Result<ResolvedLocation, Error>
             do {
-                let resolved = try await geocoder.resolve(postal: code, country: cc)
-                settings.location = resolved
-                location = resolved
-                settings.locationSource = .zip
-                locationSource = .zip
-                geocodeError = nil
-                scheduleInputsDidChange()
-            } catch let error as GeocodeError {
-                geocodeError = error.errorDescription
+                result = .success(try await geocoder.resolve(postal: code, country: cc))
             } catch {
-                geocodeError = GeocodeError.badResponse.errorDescription
+                result = .failure(error)
             }
+            let cancelled = Task.isCancelled
+            guard let self else { return }
+            self.completePostalLookup(request, result: result, cancelled: cancelled)
         }
     }
 
+    private func completePostalLookup(_ request: PostalLookupRequest,
+                                      result: Result<ResolvedLocation, Error>,
+                                      cancelled: Bool) {
+        defer { finishPostalLookup(request) }
+        guard !cancelled,
+              postalLookupRequest == request,
+              request.matches(postalInput: zipInput,
+                              countryInput: countryInput,
+                              source: locationSource) else { return }
+
+        switch result {
+        case .success(let resolved):
+            settings.location = resolved
+            location = resolved
+            settings.locationSource = .zip
+            geocodeError = nil
+            scheduleInputsDidChange()
+        case .failure(let error as GeocodeError):
+            geocodeError = error.errorDescription
+        case .failure:
+            geocodeError = GeocodeError.badResponse.errorDescription
+        }
+    }
+
+    private func finishPostalLookup(_ request: PostalLookupRequest) {
+        guard postalLookupRequest == request else { return }
+        postalLookupRequest = nil
+        postalLookupTask = nil
+        isResolving = false
+    }
+
+    private func cancelPostalLookup() {
+        postalLookupTask?.cancel()
+        postalLookupTask = nil
+        postalLookupRequest = nil
+        isResolving = false
+    }
+
     func setLocationSource(_ source: LocationSource) {
+        if source == .coreLocation {
+            cancelPostalLookup()
+        }
         locationSource = source
         settings.locationSource = source
         if source == .coreLocation {

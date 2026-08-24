@@ -532,6 +532,28 @@ struct SunCalculatorTestMain {
             }
         }
 
+        // --- Async postal lookup acceptance ---
+        do {
+            print("Postal lookup request identity:")
+            let request = PostalLookupRequest(
+                id: UUID(uuidString: "D429E643-07A9-456D-982F-C9931C568CB3")!,
+                postalCode: "10001",
+                countryCode: "US"
+            )
+            t.check(request.matches(postalInput: " 10001 ", countryInput: "us",
+                                    source: .zip),
+                    "current postal request accepts normalized matching inputs")
+            t.check(!request.matches(postalInput: "10002", countryInput: "US",
+                                     source: .zip),
+                    "edited postal input rejects an older response")
+            t.check(!request.matches(postalInput: "10001", countryInput: "US",
+                                     source: .coreLocation),
+                    "switching to My Location rejects an in-flight postal response")
+            let newer = PostalLookupRequest(postalCode: "10001", countryCode: "US")
+            t.check(newer != request,
+                    "a newer lookup cannot be mistaken for an older identical request")
+        }
+
         t.finish()
     }
 }
