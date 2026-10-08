@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 background_source="BackgroundVerification.swift"
-for file in "$background_source" run-tests.sh Tools/verify-background.sh; do
+for file in "$background_source" PresentationHostTests.swift PresentationHost.swift run-tests.sh Tools/verify-background.sh; do
     if [[ ! -f "$file" ]]; then
         echo "✗ background-safety boundary file is missing: $file" >&2
         exit 1
@@ -35,7 +35,7 @@ forbidden=(
 )
 
 for token in "${forbidden[@]}"; do
-    if rg -n --fixed-strings "$token" "$background_source" run-tests.sh Tools/verify-background.sh; then
+    if rg -n --fixed-strings "$token" "$background_source" PresentationHostTests.swift PresentationHost.swift run-tests.sh Tools/verify-background.sh; then
         echo "✗ forbidden background-test operation detected: $token" >&2
         exit 1
     fi

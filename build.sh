@@ -60,6 +60,8 @@ SOURCES=(
     main.swift
     AppModel.swift
     PopoverView.swift
+    PresentationHost.swift
+    MenuBarDiagnostics.swift
     Services.swift
     Support.swift
     Scheduler.swift

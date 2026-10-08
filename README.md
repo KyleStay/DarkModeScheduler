@@ -327,6 +327,19 @@ in-memory adapters, then renders the real `PopoverView` offscreen into
 `make verify` includes `make verify-background` after the pure tests, universal
 Full build, and distribution-variant checks.
 
+### Menu bar presentation reproduction (opt-in)
+
+```bash
+Tools/menu-bar-diagnostic.sh --cycle --duration 30
+```
+
+This opens a temporary real menu bar scene with synthetic day/night models and
+records native button/host evidence in `.build/menu-bar-diagnostic/`. Settings
+controls are disabled; actual appearance, Night Shift, location and login
+settings are untouched. It does not install or replace the running app. See
+[the diagnostic commands and evidence guide](Docs/VERIFICATION.md#host-sizing-correction-and-synthetic-presentation-diagnostic)
+for fixed-phase cases, sampling a missing icon, and the limits of offscreen QA.
+
 ### Pure self-test (`--selftest`)
 
 ```bash

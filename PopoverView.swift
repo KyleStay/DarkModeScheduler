@@ -15,6 +15,9 @@ import AppKit
 struct PopoverView: View {
     @EnvironmentObject var model: AppModel
     @State private var contentHeight: CGFloat = 0
+    @State private var hostMaximumHeight: CGFloat = PopoverSizing.maximumHeight(visibleHeight: nil)
+    // Only the offscreen verification lane supplies a synthetic display budget.
+    var fixtureVisibleHeight: CGFloat? = nil
 
     var body: some View {
         ScrollView {
@@ -54,23 +57,28 @@ struct PopoverView: View {
             idealHeight: fittedPopoverHeight,
             maxHeight: fittedPopoverHeight ?? maxPopoverHeight
         )
+        .background {
+            if fixtureVisibleHeight == nil {
+                PresentationHostReader { view, reason in
+                    let maximum = PopoverSizing.maximumHeight(
+                        visibleHeight: view.window?.screen?.visibleFrame.height)
+                    if hostMaximumHeight != maximum { hostMaximumHeight = maximum }
+                    MenuBarDiagnostics.shared?.recordHost(view, reason: "popover-" + reason)
+                }
+            }
+        }
         .onPreferenceChange(PopoverContentHeightKey.self) { height in
             contentHeight = height
         }
     }
 
     private var fittedPopoverHeight: CGFloat? {
-        guard contentHeight > 0 else { return nil }
-        return min(contentHeight, maxPopoverHeight)
+        PopoverSizing.fittedHeight(content: contentHeight, maximum: maxPopoverHeight)
     }
 
-    /// The usable height of the screen the menu bar lives on, minus a small
-    /// margin. Falls back to a generous constant if no screen is reported.
     private var maxPopoverHeight: CGFloat {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-        let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? 900
-        return max(320, visible - 24)
+        fixtureVisibleHeight.map { PopoverSizing.maximumHeight(visibleHeight: $0) }
+            ?? hostMaximumHeight
     }
 
     // MARK: Header

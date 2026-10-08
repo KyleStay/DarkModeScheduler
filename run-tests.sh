@@ -47,3 +47,12 @@ echo "==> Verifying CoreBrightness Night Shift status mapping…"
     -o "$BUILD_DIR/NightShiftAdapterTests" \
     NightShiftAdapterTests.swift Services.swift Support.swift Scheduler.swift SunCalculator.swift
 "$BUILD_DIR/NightShiftAdapterTests"
+
+echo
+echo "==> Verifying presentation host migration and sizing (offscreen)…"
+/usr/bin/swiftc -O -warnings-as-errors \
+    -module-cache-path "$BUILD_DIR/module-cache" \
+    -target "$(uname -m)-apple-macos13.0" \
+    -o "$BUILD_DIR/PresentationHostTests" \
+    PresentationHostTests.swift PresentationHost.swift
+"$BUILD_DIR/PresentationHostTests"
