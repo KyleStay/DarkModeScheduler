@@ -18,12 +18,7 @@ struct DarkModeSchedulerApp: App {
         MenuBarExtra {
             PopoverView().environmentObject(model)
         } label: {
-            // The icon reflects the schedule phase, while the next boundary is
-            // surfaced without opening
-            // the popover via the item's help tooltip and accessibility label.
-            Image(systemName: model.scheduledNight ? "moon.stars" : "sun.max")
-                .help(model.glanceSummary)
-                .accessibilityLabel(model.glanceSummary)
+            MenuBarGlyph(night: model.scheduledNight, summary: model.glanceSummary)
         }
         .menuBarExtraStyle(.window)
     }
@@ -236,6 +231,11 @@ if CommandLine.arguments.contains("--interactive-selftest") {
 }
 if CommandLine.arguments.contains("--selftest") {
     SelfTest.run()  // never returns
+}
+
+if CommandLine.arguments.contains("--menu-bar-diagnostic") {
+    MenuBarDiagnosticApp.main()
+    exit(0) // Never fall through into the live model after diagnostic shutdown.
 }
 
 DarkModeSchedulerApp.main()

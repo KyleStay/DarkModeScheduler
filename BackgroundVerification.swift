@@ -41,6 +41,7 @@ private struct BackgroundReport: Codable {
     let defaultsIsolation: String
     let adapters: [String]
     let artifacts: [BackgroundArtifact]
+    let glyphs: [BackgroundArtifact]
 }
 
 /// Packaged, nonactivating verification of the real popover view.
@@ -53,10 +54,14 @@ enum BackgroundVerification {
     private static let canvas = NSSize(width: 360, height: 1200)
 
     static func run(outputPath: String?) -> Never {
-        Task { @MainActor in
-            exit(Int32(runOnMainActor(outputPath: outputPath)))
+        // Top-level CLI dispatch is on the AppKit main thread. Do not detach it
+        // with dispatchMain(): a main-actor executor alone is insufficient for
+        // AppKit's offscreen layout/transaction lifecycle.
+        let result = MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            return runOnMainActor(outputPath: outputPath)
         }
-        dispatchMain()
+        exit(Int32(result))
     }
 
     @MainActor
@@ -123,13 +128,30 @@ enum BackgroundVerification {
                 artifacts.append(try render(model: model, name: name, to: path))
             }
 
+            // The same label view used by the real scene, in both phases,
+            // appearances and backing scales. These test content, not WindowServer.
+            var glyphs: [BackgroundArtifact] = []
+            for night in [false, true] {
+                for dark in [false, true] {
+                    for scale in [1, 2] {
+                        glyphs.append(try renderGlyph(night: night, dark: dark, scale: scale,
+                                                     directory: outputDirectory))
+                    }
+                }
+            }
+            for (name, fixture) in fixtures {
+                artifacts.append(try render(model: AppModel(backgroundFixture: fixture),
+                                            name: name + "-short-host",
+                                            to: outputDirectory.appendingPathComponent(name + "-short-host.png"),
+                                            visibleHeight: 500))
+            }
             let report = BackgroundReport(
                 verification: "background-safe",
-                fixtureVersion: 1,
+                fixtureVersion: 2,
                 defaultsIsolation: "unique test suite: \(suiteName)",
                 adapters: ["BackgroundAppearanceController", "BackgroundNightShiftController",
                            "LocationService(backgroundOnly: true)"],
-                artifacts: artifacts)
+                artifacts: artifacts, glyphs: glyphs)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let reportData = try encoder.encode(report)
@@ -144,10 +166,22 @@ enum BackgroundVerification {
         return 0
     }
 
-    private static func render(model: AppModel, name: String, to path: URL) throws -> BackgroundArtifact {
-        let root = AnyView(PopoverView().environmentObject(model))
+    private static func render(model: AppModel, name: String, to path: URL,
+                               visibleHeight: CGFloat? = nil) throws -> BackgroundArtifact {
+        let canvas = visibleHeight.map { NSSize(width: 360, height: $0 - 24) } ?? Self.canvas
+        let root = AnyView(PopoverView(fixtureVisibleHeight: visibleHeight ?? 900)
+            .environmentObject(model)
+            .environment(\.colorScheme, .light)
+            .background(Color.white))
         let hostingView = NSHostingView(rootView: root)
+        hostingView.appearance = NSAppearance(named: .aqua)
         hostingView.frame = NSRect(origin: .zero, size: canvas)
+        let window = NSWindow(contentRect: hostingView.frame, styleMask: .borderless,
+                              backing: .buffered, defer: true)
+        window.contentView = hostingView
+        defer { withExtendedLifetime(window) {} }
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         hostingView.layoutSubtreeIfNeeded()
 
         guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
@@ -161,8 +195,8 @@ enum BackgroundVerification {
         }
         var nonBackgroundSampleCount = 0
         var distinctSamples = Set<UInt32>()
-        for y in stride(from: 0, to: Int(canvas.height), by: 4) {
-            for x in stride(from: 0, to: Int(canvas.width), by: 4) {
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 4) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
                 var pixel = [Int](repeating: 0, count: 4)
                 pixel.withUnsafeMutableBufferPointer { buffer in
                     bitmap.getPixel(buffer.baseAddress!, atX: x, y: y)
@@ -170,20 +204,71 @@ enum BackgroundVerification {
                 let sample = UInt32(pixel[0]) << 24 | UInt32(pixel[1]) << 16
                     | UInt32(pixel[2]) << 8 | UInt32(pixel[3])
                 distinctSamples.insert(sample)
-                if pixel[3] > 0 && (pixel[0] > 8 || pixel[1] > 8 || pixel[2] > 8) {
+                if pixel[3] > 0 && (pixel[0] < 240 || pixel[1] < 240 || pixel[2] < 240) {
                     nonBackgroundSampleCount += 1
                 }
             }
         }
+        try data.write(to: path, options: .atomic)
         guard nonBackgroundSampleCount > 100, distinctSamples.count > 1 else {
             throw NSError(domain: "BackgroundVerification", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "rendered fixture has no visible UI content"])
+                          userInfo: [NSLocalizedDescriptionKey: "rendered fixture has no visible UI content: \(name), samples \(nonBackgroundSampleCount), colors \(distinctSamples.count)"])
         }
-        try data.write(to: path, options: .atomic)
         return BackgroundArtifact(name: name, relativePath: path.lastPathComponent,
-                                  width: Int(canvas.width), height: Int(canvas.height),
+                                  width: bitmap.pixelsWide, height: bitmap.pixelsHigh,
                                   byteCount: data.count,
                                   nonBackgroundSampleCount: nonBackgroundSampleCount,
                                   distinctSampleCount: distinctSamples.count)
     }
+    private static func renderGlyph(night: Bool, dark: Bool, scale: Int,
+                                    directory: URL) throws -> BackgroundArtifact {
+        let name = "glyph-\(night ? "night" : "day")-\(dark ? "dark" : "light")-\(scale)x"
+        let size = NSSize(width: 32, height: 24)
+        let root = ZStack {
+            (dark ? Color.black : Color.white)
+            MenuBarGlyph(night: night, summary: "Synthetic phase")
+        }
+        .frame(width: size.width, height: size.height)
+        .environment(\.colorScheme, dark ? .dark : .light)
+        let hosting = NSHostingView(rootView: root)
+        hosting.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        hosting.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless,
+                              backing: .buffered, defer: true)
+        window.contentView = hosting
+        defer { withExtendedLifetime(window) {} }
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32 * scale,
+                                      pixelsHigh: 24 * scale, bitsPerSample: 8,
+                                      samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        bitmap.size = size
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        var visible = 0
+        var levels = Set<Int>()
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let luminance = (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                levels.insert(Int(luminance * 255))
+                if abs(luminance - (dark ? 0 : 1)) > 0.5 && color.alphaComponent > 0.5 {
+                    visible += 1
+                }
+            }
+        }
+        guard visible > 12 * scale * scale,
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "BackgroundVerification", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "blank or low-contrast glyph: \(name)"])
+        }
+        let path = directory.appendingPathComponent(name + ".png")
+        try png.write(to: path, options: .atomic)
+        return BackgroundArtifact(name: name, relativePath: path.lastPathComponent,
+                                  width: bitmap.pixelsWide, height: bitmap.pixelsHigh,
+                                  byteCount: png.count, nonBackgroundSampleCount: visible,
+                                  distinctSampleCount: levels.count)
+    }
+
 }
